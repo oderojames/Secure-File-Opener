@@ -1,7 +1,21 @@
 import { Router } from "express";
-import { openai } from "@workspace/integrations-openai-ai-server";
+import OpenAI from "openai";
 
 const router = Router();
+
+function getOpenAIClient() {
+  const apiKey = process.env["OPENAI_API_KEY"];
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not set.");
+  const isOpenRouter = apiKey.startsWith("sk-or-");
+  return new OpenAI({
+    apiKey,
+    ...(isOpenRouter && { baseURL: "https://openrouter.ai/api/v1" }),
+  });
+}
+
+function getModel(apiKey: string) {
+  return apiKey.startsWith("sk-or-") ? "openai/gpt-4o" : "gpt-4o";
+}
 
 router.post("/analyze/mpesa", async (req, res) => {
   const { text } = req.body as { text?: string };
@@ -11,9 +25,9 @@ router.post("/analyze/mpesa", async (req, res) => {
     return;
   }
 
-  const prompt = `You are a financial analyst specializing in M-Pesa mobile money statements.
+  const prompt = `You are a financial analyst specializing in M-Pesa mobile money statements from Kenya.
 
-The following is raw text extracted from an M-Pesa statement PDF. Analyze it thoroughly and return a JSON object with this exact structure:
+The following is raw text extracted from an M-Pesa statement PDF. Analyze ALL transactions carefully and return a JSON object with this exact structure:
 
 {
   "dailyIncome": [
@@ -43,26 +57,34 @@ The following is raw text extracted from an M-Pesa statement PDF. Analyze it tho
   }
 }
 
-Rules:
-- Only count INCOMING transactions as income (money received, deposits). Exclude withdrawals, payments, transfers out, airtime purchases, M-Pesa charges, and any money sent OUT.
-- Incoming transactions include: "received from", "deposited", "paid by", "from ", customer deposits, and similar credit entries.
-- Amounts should be in KES (Kenyan Shillings).
-- Trust score (0-100): 
-  - 80-100 = Excellent: very consistent, high-frequency income
-  - 60-79 = Good: reasonably consistent
-  - 40-59 = Fair: some inconsistency
-  - 0-39 = Poor: very irregular or low income
-  - Base it on: income consistency, frequency, average amounts, and growth trend.
-- If you cannot find clear transaction data, still return the structure with empty arrays and a trust score of 0 with reasoning explaining the issue.
-- Return ONLY valid JSON, no markdown, no explanation outside the JSON.
+CRITICAL RULES:
+1. INCOME ONLY — count ONLY money coming IN to the account:
+   - "Received from" / "You received" / "Cash received"
+   - "Paid to you" / "Payment received" / "Business payment received"
+   - "Deposited by agent" / "M-Pesa deposit" / "Reversal credit"
+   - Any positive credit to the M-Pesa account
+2. EXCLUDE all outgoing money: withdrawals, payments sent, airtime, M-Pesa charges, transfers out, "pay bill", "send money", "buy goods".
+3. Parse dates from whatever format appears in the statement (e.g. "15/01/2024", "Jan 15, 2024", "15 Jan 2024").
+4. Amounts in KES. Strip commas before parsing numbers (e.g. "1,500.00" → 1500.00).
+5. Trust score 0–100:
+   - 80–100 Excellent: consistent, frequent, growing income
+   - 60–79 Good: reasonably regular income
+   - 40–59 Fair: irregular or sporadic
+   - 0–39 Poor: very low, rare, or no income found
+6. If no transactions are found, return empty arrays and score 0 with a clear reasoning.
+7. Return ONLY raw valid JSON — no markdown fences, no extra text before or after.
 
 M-Pesa Statement Text:
-${text.substring(0, 15000)}`;
+${text.substring(0, 20000)}`;
 
   try {
+    const apiKey = process.env["OPENAI_API_KEY"] ?? "";
+    const openai = getOpenAIClient();
     const response = await openai.chat.completions.create({
-      model: "gpt-5.1",
-      max_completion_tokens: 8192,
+      model: getModel(apiKey),
+      max_tokens: 3500,
+      temperature: 0,
+      response_format: { type: "json_object" },
       messages: [{ role: "user", content: prompt }],
     });
 
@@ -72,19 +94,14 @@ ${text.substring(0, 15000)}`;
     try {
       parsed = JSON.parse(content);
     } catch {
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        parsed = JSON.parse(jsonMatch[0]);
-      } else {
-        res.status(500).json({ error: "AI returned unreadable response.", raw: content.substring(0, 200) });
-        return;
-      }
+      res.status(500).json({ error: "AI returned unreadable response.", raw: content.substring(0, 300) });
+      return;
     }
 
     res.json(parsed);
   } catch (err: any) {
     req.log.error({ err }, "Analysis failed");
-    res.status(500).json({ error: "Analysis failed. Please try again." });
+    res.status(500).json({ error: err.message || "Analysis failed. Please try again." });
   }
 });
 
