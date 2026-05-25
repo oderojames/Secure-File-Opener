@@ -27,7 +27,7 @@ interface TrustScore {
 }
 
 interface Summary {
-  totalIncome: number; totalExpenditure: number; netCashFlow: number;
+  totalIncome: number; totalExpenditure: number; netCashFlow: number; cashFlowRatio: number;
   averageMonthlyIncome: number; averageDailyIncome: number;
   peakIncomeMonth: string; lowestIncomeMonth: string; currency: string;
   periodStart: string; periodEnd: string; totalTransactions: number;
@@ -396,19 +396,33 @@ export default function Vault() {
             </div>
 
             {/* Summary stats */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              {/* Cash Flow Ratio — primary signal, highlighted */}
+              <div className="col-span-2 sm:col-span-1 bg-card border-2 rounded-xl p-4"
+                style={{ borderColor: (sm.cashFlowRatio >= 1.5 ? '#22c55e' : sm.cashFlowRatio >= 1.0 ? '#f59e0b' : '#ef4444') + '60' }}>
+                <div className="flex items-center gap-1.5 mb-1">
+                  <BarChart3 size={13} className="text-muted-foreground" />
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Cash Flow Ratio</span>
+                </div>
+                <div className="text-2xl font-black" style={{ color: sm.cashFlowRatio >= 1.5 ? '#22c55e' : sm.cashFlowRatio >= 1.0 ? '#f59e0b' : '#ef4444' }}>
+                  {(sm.cashFlowRatio || 0).toFixed(2)}×
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">
+                  {sm.cashFlowRatio >= 2.0 ? 'Strong surplus' : sm.cashFlowRatio >= 1.2 ? 'Healthy surplus' : sm.cashFlowRatio >= 1.0 ? 'Break-even' : 'Spending > earning'}
+                </div>
+              </div>
               {[
                 { label: 'Total Income', value: fmt(sm.totalIncome, currency), icon: TrendingUp, color: 'text-green-400' },
                 { label: 'Total Expenditure', value: fmt(sm.totalExpenditure, currency), icon: BadgeAlert, color: 'text-red-400' },
-                { label: 'Net Cash Flow', value: fmt(sm.netCashFlow, currency), icon: BarChart3, color: sm.netCashFlow >= 0 ? 'text-green-400' : 'text-red-400' },
+                { label: 'Net Cash Flow', value: fmt(sm.netCashFlow, currency), icon: MinusCircle, color: sm.netCashFlow >= 0 ? 'text-green-400' : 'text-red-400' },
                 { label: 'Avg Monthly Income', value: fmt(sm.averageMonthlyIncome, currency), icon: Calendar, color: 'text-blue-400' },
               ].map(({ label, value, icon: Icon, color }) => (
                 <div key={label} className="bg-card border border-border rounded-xl p-4">
-                  <div className={`flex items-center gap-1.5 mb-1.5 ${color}`}>
-                    <Icon size={13} />
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <Icon size={13} className="text-muted-foreground" />
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
                   </div>
-                  <div className={`text-base font-bold ${color}`}>{value}</div>
+                  <div className={`text-sm font-bold ${color}`}>{value}</div>
                 </div>
               ))}
             </div>
