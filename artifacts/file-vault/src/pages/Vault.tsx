@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { 
   File, 
   Lock, 
@@ -16,7 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/' + pdfjsLib.version + '/pdf.worker.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 interface StoredFile {
   id: string;
@@ -172,7 +173,7 @@ export default function Vault() {
         const canvas = canvasRef.current;
         canvas.width = viewport.width;
         canvas.height = viewport.height;
-        await page.render({ canvasSource: canvas.getContext('2d')!, viewport }).promise;
+        await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise;
       } catch (err) {
         console.error('Render error', err);
       }
