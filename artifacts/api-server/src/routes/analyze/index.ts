@@ -1,22 +1,7 @@
 import { Router } from "express";
-import OpenAI from "openai";
+import { openai } from "@workspace/integrations-openai-ai-server";
 
 const router = Router();
-
-function getOpenAIClient() {
-  const apiKey = process.env["OPENAI_API_KEY"];
-  if (!apiKey) throw new Error("OPENAI_API_KEY is not set.");
-  let baseURL: string | undefined;
-  if (apiKey.startsWith("sk-or-")) baseURL = "https://openrouter.ai/api/v1";
-  if (apiKey.startsWith("nvapi-")) baseURL = "https://integrate.api.nvidia.com/v1";
-  return new OpenAI({ apiKey, ...(baseURL && { baseURL }) });
-}
-
-function getModel(apiKey: string) {
-  if (apiKey.startsWith("sk-or-")) return "openai/gpt-4o";
-  if (apiKey.startsWith("nvapi-")) return "nvidia/llama-3.3-nemotron-super-49b-v1";
-  return "gpt-4o";
-}
 
 router.post("/analyze/mpesa", async (req, res) => {
   const { text } = req.body as { text?: string };
@@ -26,9 +11,11 @@ router.post("/analyze/mpesa", async (req, res) => {
     return;
   }
 
-  const prompt = `You are a financial analyst specializing in M-Pesa mobile money statements from Kenya.
+  const prompt = `You are a senior credit analyst specializing in mobile money (M-Pesa) statement analysis for creditworthiness assessment in Kenya.
 
-The following is raw text extracted from an M-Pesa statement PDF. Analyze ALL transactions carefully and return a JSON object with this exact structure:
+Analyze the following M-Pesa statement text thoroughly. Extract every transaction and produce a detailed credit risk report.
+
+Return ONLY a raw JSON object (no markdown, no extra text) matching this exact structure:
 
 {
   "dailyIncome": [
@@ -38,55 +25,88 @@ The following is raw text extracted from an M-Pesa statement PDF. Analyze ALL tr
     { "month": "YYYY-MM", "label": "January 2024", "amount": 5678.00, "transactionCount": 12 }
   ],
   "trustScore": {
-    "score": 72,
-    "label": "Good",
-    "reasoning": "Brief explanation of the score",
+    "score": 74,
+    "grade": "B+",
+    "label": "Good Credit",
+    "creditLimit": 45000,
+    "reasoning": "2-3 sentence overall assessment of creditworthiness",
     "factors": [
-      { "name": "Income Consistency", "impact": "positive", "detail": "Regular weekly income..." },
-      { "name": "Frequency", "impact": "positive", "detail": "..." },
-      { "name": "Volatility", "impact": "negative", "detail": "..." }
-    ]
+      { "name": "Income Stability", "score": 80, "weight": 30, "impact": "positive", "detail": "Consistent monthly inflows averaging KES X over Y months" },
+      { "name": "Income Frequency", "score": 70, "weight": 20, "impact": "positive", "detail": "Regular transactions suggest stable income source" },
+      { "name": "Cash Flow Balance", "score": 65, "weight": 20, "impact": "neutral", "detail": "Ratio of income to expenditure" },
+      { "name": "Transaction Diversity", "score": 60, "weight": 10, "impact": "neutral", "detail": "Multiple income sources reduce risk" },
+      { "name": "Account Longevity", "score": 75, "weight": 10, "impact": "positive", "detail": "Statement spans X months" },
+      { "name": "Repayment Signals", "score": 50, "weight": 10, "impact": "negative", "detail": "Evidence of loan repayments or fuliza usage" }
+    ],
+    "riskLevel": "Medium",
+    "recommendation": "Approve with conditions"
   },
   "summary": {
     "totalIncome": 9876.50,
+    "totalExpenditure": 6543.20,
+    "netCashFlow": 3333.30,
     "averageMonthlyIncome": 3292.17,
     "averageDailyIncome": 108.50,
+    "peakIncomeMonth": "January 2024",
+    "lowestIncomeMonth": "March 2024",
     "currency": "KES",
     "periodStart": "YYYY-MM-DD",
     "periodEnd": "YYYY-MM-DD",
-    "totalTransactions": 45
+    "totalTransactions": 45,
+    "incomeTransactions": 20,
+    "expenditureTransactions": 25
   }
 }
 
-CRITICAL RULES:
-1. INCOME ONLY — count ONLY money coming IN to the account:
-   - "Received from" / "You received" / "Cash received"
-   - "Paid to you" / "Payment received" / "Business payment received"
-   - "Deposited by agent" / "M-Pesa deposit" / "Reversal credit"
-   - Any positive credit to the M-Pesa account
-2. EXCLUDE all outgoing money: withdrawals, payments sent, airtime, M-Pesa charges, transfers out, "pay bill", "send money", "buy goods".
-3. Parse dates from whatever format appears in the statement (e.g. "15/01/2024", "Jan 15, 2024", "15 Jan 2024").
-4. Amounts in KES. Strip commas before parsing numbers (e.g. "1,500.00" → 1500.00).
-5. Trust score 0–100:
-   - 80–100 Excellent: consistent, frequent, growing income
-   - 60–79 Good: reasonably regular income
-   - 40–59 Fair: irregular or sporadic
-   - 0–39 Poor: very low, rare, or no income found
-6. If no transactions are found, return empty arrays and score 0 with a clear reasoning.
-7. Return ONLY raw valid JSON — no markdown fences, no extra text before or after.
+ANALYSIS RULES:
 
-M-Pesa Statement Text:
+INCOME (credits — include these):
+- "Received from", "You received", "Cash received", "Paid to you"
+- "Business payment received", "Payment received", "Reversal credit"
+- "Deposited by agent", "M-Pesa deposit"
+- Any positive credit to the account
+
+EXPENDITURE (debits — track but do NOT count as income):
+- Withdrawals, "Send money", "Pay bill", "Buy goods"
+- Airtime purchases, M-Pesa transaction charges
+- "Fuliza" or loan repayments (flag these — they affect creditworthiness)
+- Any money leaving the account
+
+TRUST SCORE CALCULATION (0–100, weighted):
+- Income Stability (30%): Consistency of monthly income. High = similar amounts each month. Low = erratic.
+- Income Frequency (20%): How often money comes in. Daily/weekly = high. Monthly only = medium.
+- Cash Flow Balance (20%): Net income after expenditure. Positive surplus = good. Chronic deficit = poor.
+- Transaction Diversity (10%): Multiple different income sources = lower risk.
+- Account Longevity (10%): More months of data = more reliable score.
+- Repayment Signals (10%): Fuliza/KCB M-Pesa/loan repayments reduce score. None found = good.
+
+GRADE SCALE:
+- 85–100: A (Excellent Credit) — recommend up to 3x avg monthly income as credit limit
+- 70–84: B+ (Good Credit) — recommend up to 2x avg monthly income
+- 55–69: C (Fair Credit) — recommend up to 1x avg monthly income
+- 40–54: D (Poor Credit) — recommend up to 0.5x avg monthly income
+- 0–39: F (Very Poor / No Credit) — do not recommend credit
+
+RISK LEVELS: Low (85+), Medium (65–84), High (40–64), Very High (0–39)
+RECOMMENDATIONS: "Approve", "Approve with conditions", "Further review required", "Decline"
+
+If no transactions found: return empty arrays, score 0, grade F, reasoning explaining why.
+Parse all date formats (DD/MM/YYYY, MMM DD YYYY, etc.). Strip commas from amounts.
+
+M-Pesa Statement:
 ${text.substring(0, 20000)}`;
 
   try {
-    const apiKey = process.env["OPENAI_API_KEY"] ?? "";
-    const openai = getOpenAIClient();
     const response = await openai.chat.completions.create({
-      model: getModel(apiKey),
-      max_tokens: 2000,
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [{ role: "user", content: prompt }],
+      model: "gpt-5.1",
+      max_completion_tokens: 8192,
+      messages: [
+        {
+          role: "system",
+          content: "You are a financial credit analyst. Always respond with valid JSON only — no markdown, no explanation outside the JSON object.",
+        },
+        { role: "user", content: prompt },
+      ],
     });
 
     const content = response.choices[0]?.message?.content ?? "";
@@ -95,8 +115,18 @@ ${text.substring(0, 20000)}`;
     try {
       parsed = JSON.parse(content);
     } catch {
-      res.status(500).json({ error: "AI returned unreadable response.", raw: content.substring(0, 300) });
-      return;
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          parsed = JSON.parse(jsonMatch[0]);
+        } catch {
+          res.status(500).json({ error: "AI returned malformed JSON.", raw: content.substring(0, 300) });
+          return;
+        }
+      } else {
+        res.status(500).json({ error: "AI returned unreadable response.", raw: content.substring(0, 300) });
+        return;
+      }
     }
 
     res.json(parsed);

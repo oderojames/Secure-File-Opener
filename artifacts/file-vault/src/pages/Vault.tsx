@@ -2,18 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import {
-  Lock,
-  Trash2,
-  UploadCloud,
-  ShieldAlert,
-  TrendingUp,
-  Calendar,
-  BarChart3,
-  Star,
-  AlertCircle,
-  CheckCircle2,
-  MinusCircle,
-  FileText,
+  Lock, Trash2, UploadCloud, ShieldAlert, TrendingUp, Calendar,
+  BarChart3, AlertCircle, CheckCircle2, MinusCircle, FileText,
+  ShieldCheck, BadgeAlert, ThumbsUp, ThumbsDown, Minus,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,98 +13,104 @@ import { useToast } from '@/hooks/use-toast';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 interface StoredFile {
-  id: string;
-  name: string;
-  size: number;
-  dateAdded: string;
-  data: string;
-  isEncrypted?: boolean;
+  id: string; name: string; size: number; dateAdded: string; data: string; isEncrypted?: boolean;
 }
 
-interface DailyIncome {
-  date: string;
-  amount: number;
-  transactionCount: number;
-}
-
-interface MonthlyIncome {
-  month: string;
-  label: string;
-  amount: number;
-  transactionCount: number;
-}
-
-interface TrustFactor {
-  name: string;
-  impact: 'positive' | 'negative' | 'neutral';
-  detail: string;
-}
+interface DailyIncome { date: string; amount: number; transactionCount: number; }
+interface MonthlyIncome { month: string; label: string; amount: number; transactionCount: number; }
+interface TrustFactor { name: string; score: number; weight: number; impact: 'positive' | 'negative' | 'neutral'; detail: string; }
 
 interface TrustScore {
-  score: number;
-  label: string;
-  reasoning: string;
-  factors: TrustFactor[];
+  score: number; grade: string; label: string; creditLimit: number;
+  reasoning: string; factors: TrustFactor[];
+  riskLevel: string; recommendation: string;
 }
 
 interface Summary {
-  totalIncome: number;
-  averageMonthlyIncome: number;
-  averageDailyIncome: number;
-  currency: string;
-  periodStart: string;
-  periodEnd: string;
-  totalTransactions: number;
+  totalIncome: number; totalExpenditure: number; netCashFlow: number;
+  averageMonthlyIncome: number; averageDailyIncome: number;
+  peakIncomeMonth: string; lowestIncomeMonth: string; currency: string;
+  periodStart: string; periodEnd: string; totalTransactions: number;
+  incomeTransactions: number; expenditureTransactions: number;
 }
 
 interface AnalysisResult {
-  dailyIncome: DailyIncome[];
-  monthlyIncome: MonthlyIncome[];
-  trustScore: TrustScore;
-  summary: Summary;
+  dailyIncome: DailyIncome[]; monthlyIncome: MonthlyIncome[];
+  trustScore: TrustScore; summary: Summary;
 }
 
 function fmt(n: number, currency = 'KES') {
-  return `${currency} ${n.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `${currency} ${(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function TrustGauge({ score, label }: { score: number; label: string }) {
-  const color =
-    score >= 80 ? '#22c55e' : score >= 60 ? '#3b82f6' : score >= 40 ? '#f59e0b' : '#ef4444';
-  const circumference = 2 * Math.PI * 54;
-  const dash = (score / 100) * circumference;
+function gradeColor(grade: string) {
+  if (grade?.startsWith('A')) return '#22c55e';
+  if (grade?.startsWith('B')) return '#3b82f6';
+  if (grade?.startsWith('C')) return '#f59e0b';
+  if (grade?.startsWith('D')) return '#f97316';
+  return '#ef4444';
+}
 
+function scoreColor(score: number) {
+  if (score >= 85) return '#22c55e';
+  if (score >= 70) return '#3b82f6';
+  if (score >= 55) return '#f59e0b';
+  if (score >= 40) return '#f97316';
+  return '#ef4444';
+}
+
+function CreditGauge({ score, grade, label }: { score: number; grade: string; label: string }) {
+  const color = scoreColor(score);
+  const circumference = 2 * Math.PI * 52;
+  const dash = (score / 100) * circumference;
   return (
-    <div className="flex flex-col items-center">
-      <svg width="140" height="140" viewBox="0 0 140 140">
-        <circle cx="70" cy="70" r="54" fill="none" stroke="hsl(220 15% 18%)" strokeWidth="12" />
-        <circle
-          cx="70" cy="70" r="54" fill="none"
-          stroke={color} strokeWidth="12"
-          strokeDasharray={`${dash} ${circumference}`}
-          strokeLinecap="round"
-          transform="rotate(-90 70 70)"
-          style={{ transition: 'stroke-dasharray 1s ease' }}
-        />
-        <text x="70" y="65" textAnchor="middle" fill="white" fontSize="28" fontWeight="700">{score}</text>
-        <text x="70" y="85" textAnchor="middle" fill="#94a3b8" fontSize="11">{label}</text>
+    <div className="flex flex-col items-center gap-2">
+      <svg width="148" height="148" viewBox="0 0 148 148">
+        <circle cx="74" cy="74" r="52" fill="none" stroke="hsl(220 15% 18%)" strokeWidth="14" />
+        <circle cx="74" cy="74" r="52" fill="none" stroke={color} strokeWidth="14"
+          strokeDasharray={`${dash} ${circumference}`} strokeLinecap="round"
+          transform="rotate(-90 74 74)" style={{ transition: 'stroke-dasharray 1.2s ease' }} />
+        <text x="74" y="64" textAnchor="middle" fill="white" fontSize="30" fontWeight="800">{score}</text>
+        <text x="74" y="82" textAnchor="middle" fill={color} fontSize="15" fontWeight="700">{grade}</text>
+        <text x="74" y="97" textAnchor="middle" fill="#94a3b8" fontSize="10">{label}</text>
       </svg>
     </div>
   );
 }
 
-function BarChartSimple({ data, currency }: { data: MonthlyIncome[]; currency: string }) {
-  if (!data.length) return <p className="text-muted-foreground text-sm text-center py-4">No monthly data</p>;
+function FactorBar({ factor }: { factor: TrustFactor }) {
+  const color = factor.impact === 'positive' ? '#22c55e' : factor.impact === 'negative' ? '#ef4444' : '#f59e0b';
+  const Icon = factor.impact === 'positive' ? ThumbsUp : factor.impact === 'negative' ? ThumbsDown : Minus;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs">
+        <div className="flex items-center gap-1.5">
+          <Icon size={11} style={{ color }} />
+          <span className="font-medium text-foreground">{factor.name}</span>
+          <span className="text-muted-foreground">({factor.weight}%)</span>
+        </div>
+        <span className="font-bold" style={{ color }}>{factor.score}/100</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${factor.score}%`, background: color }} />
+      </div>
+      <p className="text-[10px] text-muted-foreground leading-relaxed">{factor.detail}</p>
+    </div>
+  );
+}
+
+function MonthlyChart({ data, currency }: { data: MonthlyIncome[]; currency: string }) {
+  if (!data.length) return <p className="text-muted-foreground text-sm text-center py-6">No monthly data</p>;
   const max = Math.max(...data.map(d => d.amount), 1);
   return (
-    <div className="flex items-end gap-2 h-36 w-full overflow-x-auto pb-1">
-      {data.map((d) => {
-        const pct = (d.amount / max) * 100;
+    <div className="flex items-end gap-2 h-32 w-full pb-1">
+      {data.map(d => {
+        const pct = Math.max((d.amount / max) * 100, 4);
         return (
-          <div key={d.month} className="flex flex-col items-center gap-1 min-w-[40px] flex-1">
-            <span className="text-[10px] text-muted-foreground">{fmt(d.amount, currency).split(' ')[1]}</span>
-            <div className="w-full rounded-t" style={{ height: `${Math.max(pct, 4)}%`, background: 'hsl(221 83% 53%)' }} />
-            <span className="text-[10px] text-muted-foreground truncate w-full text-center">{d.label.substring(0, 3)}</span>
+          <div key={d.month} className="flex flex-col items-center gap-1 min-w-[36px] flex-1">
+            <span className="text-[9px] text-muted-foreground">{(d.amount / 1000).toFixed(1)}k</span>
+            <div className="w-full rounded-t" style={{ height: `${pct}%`, background: 'hsl(221 83% 53%)' }} />
+            <span className="text-[9px] text-muted-foreground">{d.label.substring(0, 3)}</span>
           </div>
         );
       })}
@@ -121,80 +118,83 @@ function BarChartSimple({ data, currency }: { data: MonthlyIncome[]; currency: s
   );
 }
 
+function RiskBadge({ level }: { level: string }) {
+  const map: Record<string, string> = {
+    Low: 'bg-green-500/15 text-green-400 border-green-500/30',
+    Medium: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+    High: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+    'Very High': 'bg-red-500/15 text-red-400 border-red-500/30',
+  };
+  return <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${map[level] || map.High}`}>{level} Risk</span>;
+}
+
+function RecommendationBadge({ rec }: { rec: string }) {
+  const isApprove = rec?.toLowerCase().startsWith('approve');
+  const isDecline = rec?.toLowerCase().startsWith('decline');
+  const cls = isApprove ? 'bg-green-500/15 text-green-400 border-green-500/30'
+    : isDecline ? 'bg-red-500/15 text-red-400 border-red-500/30'
+    : 'bg-amber-500/15 text-amber-400 border-amber-500/30';
+  const Icon = isApprove ? CheckCircle2 : isDecline ? AlertCircle : MinusCircle;
+  return (
+    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-semibold ${cls}`}>
+      <Icon size={15} /> {rec}
+    </div>
+  );
+}
+
 export default function Vault() {
   const [files, setFiles] = useState<StoredFile[]>([]);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
-
   const [passwordRequired, setPasswordRequired] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordCallback, setPasswordCallback] = useState<((pwd: string) => void) | null>(null);
-
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
-
   const [dragOver, setDragOver] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
     document.documentElement.classList.add('dark');
     const stored = localStorage.getItem('vault_files');
-    if (stored) {
-      try { setFiles(JSON.parse(stored)); } catch {}
-    }
+    if (stored) { try { setFiles(JSON.parse(stored)); } catch {} }
   }, []);
 
-  const saveFiles = (newFiles: StoredFile[]) => {
-    setFiles(newFiles);
-    localStorage.setItem('vault_files', JSON.stringify(newFiles));
-  };
+  const saveFiles = (f: StoredFile[]) => { setFiles(f); localStorage.setItem('vault_files', JSON.stringify(f)); };
 
-  const extractTextFromPdf = async (base64Data: string, password?: string): Promise<string> => {
-    const binary = atob(base64Data);
-    const array = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
-
-    const loadingTask = pdfjsLib.getDocument({ data: array.buffer, password: password || '' });
-
-    loadingTask.onPassword = (updatePassword: (pwd: string) => void, reason: number) => {
+  const extractText = async (base64: string, password?: string): Promise<string> => {
+    const binary = atob(base64);
+    const arr = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
+    const task = pdfjsLib.getDocument({ data: arr.buffer, password: password || '' });
+    task.onPassword = (cb: (pwd: string) => void, reason: number) => {
       setPasswordRequired(true);
       setPasswordError(reason === 2 ? 'Incorrect password' : null);
-      setPasswordCallback(() => updatePassword);
+      setPasswordCallback(() => cb);
     };
-
-    const doc = await loadingTask.promise;
-    setPasswordRequired(false);
-    setPasswordError(null);
-
-    let fullText = '';
+    const doc = await task.promise;
+    setPasswordRequired(false); setPasswordError(null);
+    let text = '';
     for (let i = 1; i <= doc.numPages; i++) {
       const page = await doc.getPage(i);
       const content = await page.getTextContent();
-      const pageText = content.items.map((item: any) => item.str).join(' ');
-      fullText += pageText + '\n';
+      text += content.items.map((x: any) => x.str).join(' ') + '\n';
     }
-    return fullText;
+    return text;
   };
 
   const analyzeText = async (text: string) => {
-    setAnalyzing(true);
-    setAnalysisError(null);
-    setAnalysisResult(null);
+    setAnalyzing(true); setAnalysisError(null); setAnalysisResult(null);
     try {
       const res = await fetch('/api/analyze/mpesa', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(err.error || `Server error ${res.status}`);
-      }
-      const data: AnalysisResult = await res.json();
-      setAnalysisResult(data);
-    } catch (err: any) {
-      setAnalysisError(err.message || 'Analysis failed');
+      if (!res.ok) { const e = await res.json().catch(() => ({ error: 'Unknown error' })); throw new Error(e.error || `Error ${res.status}`); }
+      setAnalysisResult(await res.json());
+    } catch (e: any) {
+      setAnalysisError(e.message || 'Analysis failed');
     } finally {
       setAnalyzing(false);
     }
@@ -203,165 +203,102 @@ export default function Vault() {
   const loadAndAnalyze = async (fileId: string, password?: string) => {
     const file = files.find(f => f.id === fileId);
     if (!file) return;
-    setAnalysisResult(null);
-    setAnalysisError(null);
+    setAnalysisResult(null); setAnalysisError(null);
     try {
-      const text = await extractTextFromPdf(file.data, password);
-      if (password && !file.isEncrypted) {
-        saveFiles(files.map(f => f.id === fileId ? { ...f, isEncrypted: true } : f));
-      }
+      const text = await extractText(file.data, password);
+      if (password && !file.isEncrypted) saveFiles(files.map(f => f.id === fileId ? { ...f, isEncrypted: true } : f));
       await analyzeText(text);
-    } catch (err: any) {
-      if (err.name === 'PasswordException') {
+    } catch (e: any) {
+      if (e.name === 'PasswordException') {
         setPasswordRequired(true);
-        setPasswordError(err.code === 2 ? 'Incorrect password' : null);
+        setPasswordError(e.code === 2 ? 'Incorrect password' : null);
         saveFiles(files.map(f => f.id === fileId ? { ...f, isEncrypted: true } : f));
-      } else {
-        setAnalysisError(err.message || 'Failed to read PDF');
-      }
+      } else { setAnalysisError(e.message || 'Failed to read PDF'); }
     }
   };
 
   useEffect(() => {
     if (selectedFileId) {
-      setPasswordRequired(false);
-      setPasswordError(null);
-      setPasswordInput('');
-      setPasswordCallback(null);
+      setPasswordRequired(false); setPasswordError(null); setPasswordInput(''); setPasswordCallback(null);
       loadAndAnalyze(selectedFileId);
-    } else {
-      setAnalysisResult(null);
-      setAnalysisError(null);
-    }
+    } else { setAnalysisResult(null); setAnalysisError(null); }
   }, [selectedFileId]);
 
   const submitPassword = (e: React.FormEvent) => {
     e.preventDefault();
-    if (passwordCallback) {
-      setPasswordCallback(null);
-      passwordCallback(passwordInput);
-      if (selectedFileId) analyzeText('').catch(() => {});
-    } else if (selectedFileId) {
-      setPasswordRequired(false);
-      loadAndAnalyze(selectedFileId, passwordInput);
-    }
+    if (passwordCallback) { setPasswordCallback(null); passwordCallback(passwordInput); }
+    else if (selectedFileId) { setPasswordRequired(false); loadAndAnalyze(selectedFileId, passwordInput); }
   };
 
   const handleFileAdd = useCallback((file: File) => {
-    if (file.type !== 'application/pdf') {
-      toast({ title: 'Invalid file', description: 'Please upload a PDF document.', variant: 'destructive' });
-      return;
-    }
+    if (file.type !== 'application/pdf') { toast({ title: 'Invalid file', description: 'Please upload a PDF.', variant: 'destructive' }); return; }
     const reader = new FileReader();
     reader.onload = () => {
       const base64 = (reader.result as string).split(',')[1];
-      const newFile: StoredFile = {
-        id: crypto.randomUUID(),
-        name: file.name,
-        size: file.size,
-        dateAdded: new Date().toISOString(),
-        data: base64,
-      };
-      const updated = [...files, newFile];
+      const nf: StoredFile = { id: crypto.randomUUID(), name: file.name, size: file.size, dateAdded: new Date().toISOString(), data: base64 };
+      const updated = [...files, nf];
       saveFiles(updated);
-      setSelectedFileId(newFile.id);
+      setSelectedFileId(nf.id);
     };
     reader.readAsDataURL(file);
   }, [files]);
 
   const handlePaste = useCallback((e: ClipboardEvent) => {
-    const items = e.clipboardData?.items;
-    for (const item of Array.from(items || [])) {
-      if (item.type === 'application/pdf') {
-        const file = item.getAsFile();
-        if (file) handleFileAdd(file);
-      }
+    for (const item of Array.from(e.clipboardData?.items || [])) {
+      if (item.type === 'application/pdf') { const f = item.getAsFile(); if (f) handleFileAdd(f); }
     }
   }, [handleFileAdd]);
 
-  useEffect(() => {
-    window.addEventListener('paste', handlePaste);
-    return () => window.removeEventListener('paste', handlePaste);
-  }, [handlePaste]);
+  useEffect(() => { window.addEventListener('paste', handlePaste); return () => window.removeEventListener('paste', handlePaste); }, [handlePaste]);
 
-  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setDragOver(true); };
-  const handleDragLeave = () => setDragOver(false);
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault(); setDragOver(false);
-    if (e.dataTransfer.files?.[0]) handleFileAdd(e.dataTransfer.files[0]);
-  };
-
-  const openFilePicker = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'application/pdf';
-    input.onchange = (e: any) => {
-      if (e.target.files?.[0]) handleFileAdd(e.target.files[0]);
-    };
-    input.click();
-  };
-
-  const formatSize = (bytes: number) => (bytes / 1024 / 1024).toFixed(2) + ' MB';
+  const openPicker = () => { const i = document.createElement('input'); i.type = 'file'; i.accept = 'application/pdf'; i.onchange = (e: any) => { if (e.target.files?.[0]) handleFileAdd(e.target.files[0]); }; i.click(); };
+  const formatSize = (b: number) => (b / 1024 / 1024).toFixed(2) + ' MB';
   const selectedFile = files.find(f => f.id === selectedFileId);
   const currency = analysisResult?.summary?.currency || 'KES';
+  const ts = analysisResult?.trustScore;
+  const sm = analysisResult?.summary;
 
   return (
-    <div className="flex h-screen w-full bg-background text-foreground overflow-hidden font-sans">
+    <div className="flex h-screen w-full bg-background text-foreground overflow-hidden">
 
       {/* Sidebar */}
-      <div className="w-72 border-r border-border bg-card flex flex-col shrink-0">
+      <div className="w-64 border-r border-border bg-card flex flex-col shrink-0">
         <div className="p-4 border-b border-border flex items-center gap-3">
           <div className="w-8 h-8 rounded bg-primary/20 flex items-center justify-center text-primary">
-            <Lock size={18} />
+            <ShieldCheck size={17} />
           </div>
           <div>
-            <h1 className="font-bold tracking-widest text-sm text-foreground">FILE VAULT</h1>
-            <p className="text-[10px] text-muted-foreground">M-Pesa Statement Analyzer</p>
+            <h1 className="font-bold tracking-widest text-xs text-foreground">CREDIT VAULT</h1>
+            <p className="text-[10px] text-muted-foreground">M-Pesa Creditworthiness</p>
           </div>
         </div>
-
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
           {files.length === 0 ? (
             <div className="text-center p-6 text-muted-foreground">
-              <ShieldAlert className="mx-auto mb-3 opacity-20" size={32} />
-              <p className="text-sm">No statements added.</p>
-              <p className="text-xs mt-1">Upload an M-Pesa PDF to begin.</p>
+              <ShieldAlert className="mx-auto mb-3 opacity-20" size={28} />
+              <p className="text-sm">No statements.</p>
+              <p className="text-xs mt-1">Upload an M-Pesa PDF.</p>
             </div>
-          ) : (
-            files.map(f => (
-              <div
-                key={f.id}
-                data-testid={`file-item-${f.id}`}
-                onClick={() => setSelectedFileId(f.id)}
-                className={`group flex items-center p-3 rounded-lg cursor-pointer transition-all ${selectedFileId === f.id ? 'bg-primary/15 border border-primary/30' : 'hover:bg-accent border border-transparent'}`}
-              >
-                <div className="mr-3 text-muted-foreground">
-                  {f.isEncrypted ? <Lock size={15} className="text-amber-400" /> : <FileText size={15} />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium truncate">{f.name}</div>
-                  <div className="text-xs text-muted-foreground">{formatSize(f.size)}</div>
-                </div>
-                <Button
-                  variant="ghost" size="icon"
-                  data-testid={`remove-file-${f.id}`}
-                  className="opacity-0 group-hover:opacity-100 h-7 w-7 text-muted-foreground hover:text-destructive"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const next = files.filter(x => x.id !== f.id);
-                    saveFiles(next);
-                    if (selectedFileId === f.id) setSelectedFileId(null);
-                  }}
-                >
-                  <Trash2 size={13} />
-                </Button>
+          ) : files.map(f => (
+            <div key={f.id} data-testid={`file-${f.id}`} onClick={() => setSelectedFileId(f.id)}
+              className={`group flex items-center p-2.5 rounded-lg cursor-pointer transition-all ${selectedFileId === f.id ? 'bg-primary/15 border border-primary/30' : 'hover:bg-accent border border-transparent'}`}>
+              <div className="mr-2.5 text-muted-foreground">
+                {f.isEncrypted ? <Lock size={13} className="text-amber-400" /> : <FileText size={13} />}
               </div>
-            ))
-          )}
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-medium truncate">{f.name}</div>
+                <div className="text-[10px] text-muted-foreground">{formatSize(f.size)}</div>
+              </div>
+              <Button variant="ghost" size="icon" data-testid={`remove-${f.id}`}
+                className="opacity-0 group-hover:opacity-100 h-6 w-6 text-muted-foreground hover:text-destructive"
+                onClick={e => { e.stopPropagation(); const n = files.filter(x => x.id !== f.id); saveFiles(n); if (selectedFileId === f.id) setSelectedFileId(null); }}>
+                <Trash2 size={11} />
+              </Button>
+            </div>
+          ))}
         </div>
-
-        <div className="p-4 border-t border-border">
-          <Button className="w-full" variant="outline" onClick={openFilePicker} data-testid="add-document-btn">
+        <div className="p-3 border-t border-border">
+          <Button className="w-full text-xs" variant="outline" onClick={openPicker} size="sm" data-testid="add-btn">
             Add Statement
           </Button>
         </div>
@@ -369,199 +306,167 @@ export default function Vault() {
 
       {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
+
         {!selectedFileId ? (
-          /* Upload zone */
-          <div
-            className="flex-1 flex items-center justify-center p-8"
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-          >
-            <div
-              data-testid="drop-zone"
-              className={`max-w-lg w-full border-2 border-dashed rounded-2xl p-16 text-center transition-all ${dragOver ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}
-            >
-              <UploadCloud className="mx-auto text-muted-foreground mb-5" size={52} />
-              <h2 className="text-2xl font-semibold mb-2">Drop M-Pesa Statement</h2>
-              <p className="text-sm text-muted-foreground mb-2">Supports password-protected PDFs</p>
-              <p className="text-xs text-muted-foreground mb-8">Or press Ctrl+V to paste from clipboard</p>
-              <Button onClick={openFilePicker} size="lg" data-testid="browse-files-btn">Browse Files</Button>
+          <div className="flex-1 flex items-center justify-center p-8"
+            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={e => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files?.[0]) handleFileAdd(e.dataTransfer.files[0]); }}>
+            <div data-testid="drop-zone"
+              className={`max-w-lg w-full border-2 border-dashed rounded-2xl p-16 text-center transition-all ${dragOver ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}>
+              <UploadCloud className="mx-auto text-muted-foreground mb-5" size={48} />
+              <h2 className="text-2xl font-bold mb-2">Upload M-Pesa Statement</h2>
+              <p className="text-sm text-muted-foreground mb-1">AI will analyze your transactions and generate</p>
+              <p className="text-sm font-semibold text-primary mb-8">a detailed creditworthiness report</p>
+              <div className="flex items-center justify-center gap-3 mb-6 text-xs text-muted-foreground">
+                <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-green-500" /> Password-protected PDFs</span>
+                <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-green-500" /> Secure & private</span>
+              </div>
+              <Button onClick={openPicker} size="lg" data-testid="browse-btn">Browse Files</Button>
+              <p className="text-xs text-muted-foreground mt-4">Or press Ctrl+V to paste</p>
             </div>
           </div>
 
         ) : passwordRequired ? (
-          /* Password prompt */
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="max-w-sm w-full bg-card border border-border rounded-2xl p-8 shadow-xl">
-              <div className="flex justify-center mb-5 text-amber-400">
-                <Lock size={44} />
-              </div>
+              <div className="flex justify-center mb-5 text-amber-400"><Lock size={44} /></div>
               <h2 className="text-xl font-semibold text-center mb-1">Statement is encrypted</h2>
-              <p className="text-sm text-muted-foreground text-center mb-6">
-                Enter the password to unlock "{selectedFile?.name}"
-              </p>
+              <p className="text-sm text-muted-foreground text-center mb-6">Enter the password to unlock "{selectedFile?.name}"</p>
               <form onSubmit={submitPassword} className="space-y-4">
-                <Input
-                  type="password"
-                  placeholder="Enter password..."
-                  value={passwordInput}
-                  onChange={(e) => setPasswordInput(e.target.value)}
-                  autoFocus
-                  data-testid="password-input"
-                  className="bg-background"
-                />
-                {passwordError && (
-                  <p className="text-destructive text-sm font-medium flex items-center gap-1">
-                    <AlertCircle size={14} /> {passwordError}
-                  </p>
-                )}
+                <Input type="password" placeholder="Enter password..." value={passwordInput} onChange={e => setPasswordInput(e.target.value)} autoFocus data-testid="pwd-input" className="bg-background" />
+                {passwordError && <p className="text-destructive text-sm flex items-center gap-1"><AlertCircle size={13} />{passwordError}</p>}
                 <Button type="submit" className="w-full" data-testid="unlock-btn">Unlock & Analyze</Button>
               </form>
             </div>
           </div>
 
         ) : analyzing ? (
-          /* Loading */
-          <div className="flex-1 flex flex-col items-center justify-center gap-4">
-            <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+          <div className="flex-1 flex flex-col items-center justify-center gap-5">
+            <div className="w-14 h-14 border-4 border-primary border-t-transparent rounded-full animate-spin" />
             <div className="text-center">
-              <p className="font-semibold text-lg">Analyzing Statement</p>
-              <p className="text-sm text-muted-foreground mt-1">Reading transactions and computing income...</p>
+              <p className="font-bold text-xl">Analyzing Statement</p>
+              <p className="text-sm text-muted-foreground mt-2">Scanning transactions · Computing credit score · Assessing risk</p>
             </div>
           </div>
 
         ) : analysisError ? (
-          /* Error */
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="max-w-md text-center">
               <AlertCircle className="mx-auto mb-4 text-destructive" size={48} />
               <h2 className="text-xl font-semibold mb-2">Analysis Failed</h2>
               <p className="text-muted-foreground text-sm mb-6">{analysisError}</p>
-              <Button onClick={() => selectedFileId && loadAndAnalyze(selectedFileId)} variant="outline">
-                Try Again
-              </Button>
+              <Button onClick={() => selectedFileId && loadAndAnalyze(selectedFileId)} variant="outline">Try Again</Button>
             </div>
           </div>
 
-        ) : analysisResult ? (
-          /* Results */
-          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        ) : analysisResult && ts && sm ? (
+          <div className="flex-1 overflow-y-auto p-5 space-y-5">
+
             {/* Header */}
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-xl font-bold">{selectedFile?.name}</h2>
-                <p className="text-sm text-muted-foreground mt-0.5">
-                  {analysisResult.summary.periodStart} — {analysisResult.summary.periodEnd} &middot; {analysisResult.summary.totalTransactions} transactions
-                </p>
+                <h2 className="text-lg font-bold">{selectedFile?.name}</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">{sm.periodStart} — {sm.periodEnd} · {sm.totalTransactions} total transactions</p>
               </div>
-              <Button variant="outline" size="sm" onClick={() => selectedFileId && loadAndAnalyze(selectedFileId)}>
-                Re-analyze
-              </Button>
+              <Button variant="outline" size="sm" onClick={() => selectedFileId && loadAndAnalyze(selectedFileId)}>Re-analyze</Button>
             </div>
 
-            {/* Top stat cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-card border border-border rounded-xl p-5">
-                <div className="flex items-center gap-2 text-muted-foreground mb-2">
-                  <TrendingUp size={16} />
-                  <span className="text-xs font-medium uppercase tracking-wide">Total Income</span>
-                </div>
-                <div className="text-2xl font-bold text-foreground">{fmt(analysisResult.summary.totalIncome, currency)}</div>
-              </div>
-              <div className="bg-card border border-border rounded-xl p-5">
-                <div className="flex items-center gap-2 text-muted-foreground mb-2">
-                  <Calendar size={16} />
-                  <span className="text-xs font-medium uppercase tracking-wide">Avg Monthly</span>
-                </div>
-                <div className="text-2xl font-bold text-foreground">{fmt(analysisResult.summary.averageMonthlyIncome, currency)}</div>
-              </div>
-              <div className="bg-card border border-border rounded-xl p-5">
-                <div className="flex items-center gap-2 text-muted-foreground mb-2">
-                  <BarChart3 size={16} />
-                  <span className="text-xs font-medium uppercase tracking-wide">Avg Daily</span>
-                </div>
-                <div className="text-2xl font-bold text-foreground">{fmt(analysisResult.summary.averageDailyIncome, currency)}</div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              {/* Trust Score */}
-              <div className="bg-card border border-border rounded-xl p-6 flex flex-col items-center gap-4">
-                <div className="flex items-center gap-2 text-muted-foreground self-start">
-                  <Star size={16} />
-                  <span className="text-xs font-medium uppercase tracking-wide">Trust Score</span>
-                </div>
-                <TrustGauge score={analysisResult.trustScore.score} label={analysisResult.trustScore.label} />
-                <p className="text-xs text-muted-foreground text-center leading-relaxed">{analysisResult.trustScore.reasoning}</p>
-                <div className="w-full space-y-2 mt-1">
-                  {analysisResult.trustScore.factors.map((f, i) => (
-                    <div key={i} className="flex items-start gap-2">
-                      {f.impact === 'positive' ? (
-                        <CheckCircle2 size={14} className="text-green-500 mt-0.5 shrink-0" />
-                      ) : f.impact === 'negative' ? (
-                        <AlertCircle size={14} className="text-red-400 mt-0.5 shrink-0" />
-                      ) : (
-                        <MinusCircle size={14} className="text-muted-foreground mt-0.5 shrink-0" />
-                      )}
-                      <div>
-                        <span className="text-xs font-medium">{f.name}: </span>
-                        <span className="text-xs text-muted-foreground">{f.detail}</span>
-                      </div>
+            {/* Credit score hero + recommendation */}
+            <div className="bg-card border border-border rounded-2xl p-6">
+              <div className="flex flex-col sm:flex-row items-center gap-6">
+                <CreditGauge score={ts.score} grade={ts.grade} label={ts.label} />
+                <div className="flex-1 space-y-4">
+                  <div>
+                    <div className="flex items-center gap-3 mb-2 flex-wrap">
+                      <h3 className="text-xl font-bold">Credit Assessment</h3>
+                      <RiskBadge level={ts.riskLevel} />
                     </div>
-                  ))}
+                    <p className="text-sm text-muted-foreground leading-relaxed">{ts.reasoning}</p>
+                  </div>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <RecommendationBadge rec={ts.recommendation} />
+                    <div className="bg-primary/10 border border-primary/30 rounded-lg px-3 py-2">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Suggested Credit Limit</p>
+                      <p className="text-base font-bold text-primary">{fmt(ts.creditLimit, currency)}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Summary stats */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                { label: 'Total Income', value: fmt(sm.totalIncome, currency), icon: TrendingUp, color: 'text-green-400' },
+                { label: 'Total Expenditure', value: fmt(sm.totalExpenditure, currency), icon: BadgeAlert, color: 'text-red-400' },
+                { label: 'Net Cash Flow', value: fmt(sm.netCashFlow, currency), icon: BarChart3, color: sm.netCashFlow >= 0 ? 'text-green-400' : 'text-red-400' },
+                { label: 'Avg Monthly Income', value: fmt(sm.averageMonthlyIncome, currency), icon: Calendar, color: 'text-blue-400' },
+              ].map(({ label, value, icon: Icon, color }) => (
+                <div key={label} className="bg-card border border-border rounded-xl p-4">
+                  <div className={`flex items-center gap-1.5 mb-1.5 ${color}`}>
+                    <Icon size={13} />
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
+                  </div>
+                  <div className={`text-base font-bold ${color}`}>{value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {/* Credit score factors */}
+              <div className="bg-card border border-border rounded-xl p-5">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-4">Credit Score Factors</h3>
+                <div className="space-y-4">
+                  {ts.factors.map((f, i) => <FactorBar key={i} factor={f} />)}
                 </div>
               </div>
 
-              {/* Monthly Income Chart */}
-              <div className="lg:col-span-2 bg-card border border-border rounded-xl p-6">
-                <div className="flex items-center gap-2 text-muted-foreground mb-4">
-                  <BarChart3 size={16} />
-                  <span className="text-xs font-medium uppercase tracking-wide">Monthly Income</span>
-                </div>
-                <BarChartSimple data={analysisResult.monthlyIncome} currency={currency} />
-                <div className="mt-4 divide-y divide-border">
-                  {analysisResult.monthlyIncome.map((m) => (
+              {/* Monthly income chart */}
+              <div className="bg-card border border-border rounded-xl p-5 space-y-4">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Monthly Income</h3>
+                <MonthlyChart data={analysisResult.monthlyIncome} currency={currency} />
+                <div className="divide-y divide-border max-h-48 overflow-y-auto">
+                  {analysisResult.monthlyIncome.map(m => (
                     <div key={m.month} className="flex items-center justify-between py-2">
-                      <span className="text-sm text-muted-foreground">{m.label}</span>
-                      <div className="flex items-center gap-4">
-                        <span className="text-xs text-muted-foreground">{m.transactionCount} txns</span>
-                        <span className="text-sm font-semibold">{fmt(m.amount, currency)}</span>
+                      <span className="text-xs text-muted-foreground">{m.label}</span>
+                      <div className="flex items-center gap-3">
+                        <span className="text-[10px] text-muted-foreground">{m.transactionCount} txns</span>
+                        <span className="text-xs font-semibold">{fmt(m.amount, currency)}</span>
                       </div>
                     </div>
                   ))}
-                  {!analysisResult.monthlyIncome.length && (
-                    <p className="text-sm text-muted-foreground py-3 text-center">No monthly data found</p>
-                  )}
+                  {!analysisResult.monthlyIncome.length && <p className="text-xs text-muted-foreground py-3 text-center">No monthly data</p>}
                 </div>
+                {sm.peakIncomeMonth && (
+                  <div className="flex gap-4 pt-1 border-t border-border">
+                    <div><p className="text-[10px] text-muted-foreground">Peak Month</p><p className="text-xs font-semibold text-green-400">{sm.peakIncomeMonth}</p></div>
+                    {sm.lowestIncomeMonth && <div><p className="text-[10px] text-muted-foreground">Lowest Month</p><p className="text-xs font-semibold text-red-400">{sm.lowestIncomeMonth}</p></div>}
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* Daily Income */}
-            <div className="bg-card border border-border rounded-xl p-6">
-              <div className="flex items-center gap-2 text-muted-foreground mb-4">
-                <Calendar size={16} />
-                <span className="text-xs font-medium uppercase tracking-wide">Daily Income Breakdown</span>
-              </div>
+            {/* Daily income */}
+            <div className="bg-card border border-border rounded-xl p-5">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">Daily Income Breakdown</h3>
               {analysisResult.dailyIncome.length > 0 ? (
-                <div className="divide-y divide-border max-h-72 overflow-y-auto">
-                  {analysisResult.dailyIncome.map((d) => (
-                    <div key={d.date} className="flex items-center justify-between py-2.5">
-                      <span className="text-sm text-muted-foreground">{d.date}</span>
+                <div className="divide-y divide-border max-h-64 overflow-y-auto">
+                  {analysisResult.dailyIncome.map(d => (
+                    <div key={d.date} className="flex items-center justify-between py-2">
+                      <span className="text-xs text-muted-foreground">{d.date}</span>
                       <div className="flex items-center gap-4">
-                        <span className="text-xs text-muted-foreground">{d.transactionCount} txn{d.transactionCount !== 1 ? 's' : ''}</span>
-                        <span className="text-sm font-semibold text-green-400">{fmt(d.amount, currency)}</span>
+                        <span className="text-[10px] text-muted-foreground">{d.transactionCount} txn{d.transactionCount !== 1 ? 's' : ''}</span>
+                        <span className="text-xs font-semibold text-green-400">{fmt(d.amount, currency)}</span>
                       </div>
                     </div>
                   ))}
                 </div>
-              ) : (
-                <p className="text-sm text-muted-foreground text-center py-4">No daily breakdown available</p>
-              )}
+              ) : <p className="text-xs text-muted-foreground text-center py-4">No daily data available</p>}
             </div>
-          </div>
 
+          </div>
         ) : (
-          /* Initial state after selecting — shouldn't normally show */
           <div className="flex-1 flex items-center justify-center">
             <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin" />
           </div>
