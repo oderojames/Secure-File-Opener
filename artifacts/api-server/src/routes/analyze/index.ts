@@ -3,160 +3,306 @@ import { openai } from "@workspace/integrations-openai-ai-server";
 
 const router = Router();
 
-const SYSTEM = `You are a Kenyan mobile-money credit analyst. Given raw M-Pesa statement text, extract every transaction precisely and produce a creditworthiness report as a single valid JSON object — no markdown, no text outside the JSON.
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-=== TRANSACTION CLASSIFICATION ===
-INCOME (credits IN to the account):
-  Keywords: "received from", "you received", "cash received", "paid to you", "payment received",
-  "business payment received", "reversal credit", "deposited by agent", "mpesa deposit", "transfer received"
-
-EXPENDITURE (debits OUT of the account):
-  Keywords: "withdrawal", "send money", "sent to", "pay bill", "paybill", "buy goods", "lipa na mpesa",
-  "airtime", "transaction cost", "charge", "fuliza", "loan repayment", "kcb mpesa", "okoa jahazi"
-
-=== NET CASH FLOW (PRIMARY CREDIT SIGNAL) ===
-netCashFlow = totalIncome - totalExpenditure
-cashFlowRatio = totalIncome / totalExpenditure  (higher = better)
-  ≥ 2.0  → surplus score 100 (strong saver)
-  1.5–1.99 → surplus score 80
-  1.2–1.49 → surplus score 65
-  1.0–1.19 → surplus score 45 (break-even)
-  < 1.0  → surplus score 20 (spending more than earning)
-
-=== SCORING FORMULA (weighted, each sub-score 0–100) ===
-1. Net Cash Flow Strength  — weight 35%
-   Use cashFlowRatio bands above.
-
-2. Income Stability         — weight 25%
-   CV = stdDev(monthlyIncome) / mean(monthlyIncome)
-   CV ≤ 0.15 → 100, CV ≤ 0.30 → 80, CV ≤ 0.50 → 60, CV ≤ 0.75 → 40, else 20
-
-3. Income Frequency         — weight 15%
-   Avg income transactions per month:
-   ≥ 10 → 100, ≥ 6 → 80, ≥ 3 → 60, ≥ 1 → 40, else 20
-
-4. Debt Burden              — weight 15%
-   Fuliza/loan repayment count:
-   0 → 100, 1–2 → 70, 3–5 → 45, 6+ → 20
-
-5. Statement Coverage       — weight 10%
-   Months of data:
-   ≥ 6 → 100, ≥ 3 → 75, ≥ 1 → 50, else 25
-
-finalScore = round( (NCF×0.35) + (Stability×0.25) + (Frequency×0.15) + (Debt×0.15) + (Coverage×0.10) )
-
-=== GRADE + CREDIT LIMIT ===
-90–100: A+  Excellent   → limit = 4× avgMonthlyIncome
-80–89:  A   Very Good   → limit = 3× avgMonthlyIncome
-70–79:  B+  Good        → limit = 2× avgMonthlyIncome
-60–69:  B   Fair-Good   → limit = 1.5× avgMonthlyIncome
-50–59:  C   Fair        → limit = 1× avgMonthlyIncome
-40–49:  D   Poor        → limit = 0.5× avgMonthlyIncome
-0–39:   F   Very Poor   → limit = 0
-
-riskLevel:  score≥80→Low | score≥60→Medium | score≥40→High | else→Very High
-recommendation: score≥80→"Approve" | score≥65→"Approve with conditions" | score≥45→"Further review required" | else→"Decline"
-
-=== BEHAVIORAL INSIGHTS (4–6 items) ===
-Identify patterns from the transactions. Examples of what to look for:
-- Saving behavior: does balance grow after income? Does the user save a portion?
-- Spending patterns: large/frequent withdrawals, bill payments, airtime top-ups
-- Income source diversity: one employer, multiple clients, business receipts
-- Debt signals: Fuliza draws, OKoa Jahazi, KCB M-Pesa repayments
-- Payment regularity: does the user pay bills on time? same dates each month?
-- Risk behaviors: gambling, frequent cash-outs immediately after receiving money
-
-=== RECENT TRANSACTIONS (last 15 in reverse chronological order) ===
-Extract the 15 most recent transactions (any type). For each:
-- date: YYYY-MM-DD
-- description: clean short label (name of sender/recipient or transaction type, max 40 chars)
-- amount: numeric, always positive
-- type: "credit" (money in) | "debit" (money out)
-- category: one of: "Income", "Bill Payment", "Transfer", "Withdrawal", "Airtime", "Loan", "Business", "Other"
-
-=== OUTPUT SCHEMA (return exactly this) ===
-{
-  "dailyIncome": [{ "date": "YYYY-MM-DD", "amount": 0.00, "transactionCount": 0 }],
-  "monthlyIncome": [{ "month": "YYYY-MM", "label": "Month YYYY", "amount": 0.00, "transactionCount": 0 }],
-  "trustScore": {
-    "score": 0,
-    "grade": "F",
-    "label": "Very Poor Credit",
-    "creditLimit": 0,
-    "reasoning": "2–3 sentences citing specific figures: net cash flow, avg monthly income, key risk factors.",
-    "factors": [
-      { "name": "Net Cash Flow Strength", "score": 0, "weight": 35, "impact": "positive|negative|neutral", "detail": "Income KES X vs Expenditure KES Y → ratio Z.ZZ" },
-      { "name": "Income Stability",       "score": 0, "weight": 25, "impact": "positive|negative|neutral", "detail": "CV=X.XX across N months" },
-      { "name": "Income Frequency",       "score": 0, "weight": 15, "impact": "positive|negative|neutral", "detail": "Avg N.N income txns/month" },
-      { "name": "Debt Burden",            "score": 0, "weight": 15, "impact": "positive|negative|neutral", "detail": "N Fuliza/loan events detected" },
-      { "name": "Statement Coverage",     "score": 0, "weight": 10, "impact": "positive|negative|neutral", "detail": "N months of data" }
-    ],
-    "riskLevel": "Very High",
-    "recommendation": "Decline"
-  },
-  "summary": {
-    "totalIncome": 0.00,
-    "totalExpenditure": 0.00,
-    "netCashFlow": 0.00,
-    "cashFlowRatio": 0.00,
-    "averageMonthlyIncome": 0.00,
-    "averageDailyIncome": 0.00,
-    "peakIncomeMonth": "",
-    "lowestIncomeMonth": "",
-    "currency": "KES",
-    "periodStart": "YYYY-MM-DD",
-    "periodEnd": "YYYY-MM-DD",
-    "totalTransactions": 0,
-    "incomeTransactions": 0,
-    "expenditureTransactions": 0
-  },
-  "behavioralInsights": [
-    { "type": "positive|negative|warning", "title": "Short headline (5–7 words)", "description": "1–2 sentences with specific evidence from the data." }
-  ],
-  "recentTransactions": [
-    { "date": "YYYY-MM-DD", "description": "Sender/recipient or type", "amount": 0.00, "type": "credit|debit", "category": "Income|Bill Payment|Transfer|Withdrawal|Airtime|Loan|Business|Other" }
-  ]
+interface RawTransaction {
+  date: string;        // YYYY-MM-DD
+  amount: number;      // always positive
+  type: "credit" | "debit";
+  description: string; // max 50 chars
+  category: string;    // Income | Bill Payment | Transfer | Withdrawal | Airtime | Loan | Business | Other
 }
 
-RULES: Parse all date formats. Strip commas from numbers. recentTransactions must be sorted newest-first. If no transactions found, return zeroed schema with score 0, grade F, empty arrays, reasoning "No transaction data detected."`;
+interface BehavioralInsight {
+  type: "positive" | "negative" | "warning";
+  title: string;
+  description: string;
+}
+
+// ─── Extraction prompt (AI job: parse transactions only) ───────────────────────
+
+const EXTRACT_SYSTEM = `You are a Kenyan M-Pesa statement parser. Extract EVERY transaction from the text and return ONLY a raw JSON array — no markdown, no extra text.
+
+CLASSIFICATION RULES (apply in order, first match wins):
+
+CREDIT (type="credit") — line contains any of:
+  "received from" | "you received" | "cash received" | "paid to you" | "payment received"
+  "business payment received" | "reversal credit" | "deposited by agent" | "mpesa deposit" | "transfer received"
+
+DEBIT (type="debit") — line contains any of:
+  "withdrawal" | "send money" | "sent to" | "pay bill" | "paybill" | "buy goods" | "lipa na mpesa"
+  "airtime" | "transaction cost" | "charge" | "fuliza" | "loan repayment" | "kcb mpesa" | "okoa jahazi"
+
+Lines matching NEITHER type → skip completely.
+
+CATEGORY rules:
+  credit transactions → "Income" (default) or "Business" if payer name looks like a company
+  "pay bill" | "paybill" | "buy goods" → "Bill Payment"
+  "send money" | "sent to" | "transfer" → "Transfer"
+  "withdrawal" → "Withdrawal"
+  "airtime" → "Airtime"
+  "fuliza" | "loan" | "kcb mpesa" | "okoa jahazi" → "Loan"
+  everything else → "Other"
+
+OUTPUT FORMAT — return exactly this JSON array:
+[
+  {
+    "date": "YYYY-MM-DD",
+    "amount": 1234.56,
+    "type": "credit",
+    "description": "Received from John Doe",
+    "category": "Income"
+  }
+]
+
+Parse all date formats (DD/MM/YYYY, MMM DD YYYY, DD-MMM-YYYY, etc.) to YYYY-MM-DD.
+Strip commas from amounts. Amount is always a positive number.
+Return [] if no transactions found.`;
+
+const INSIGHTS_SYSTEM = `You are a Kenyan credit analyst. Given computed financial metrics, write 4–6 behavioral insights. Return ONLY a raw JSON array — no markdown.
+
+Each insight:
+{ "type": "positive"|"negative"|"warning", "title": "5–8 word headline", "description": "1–2 sentences citing specific figures." }
+
+Analyze: saving behavior, spending patterns, income diversity, debt signals, payment regularity, cash-out habits.`;
+
+// ─── Deterministic scoring engine ─────────────────────────────────────────────
+
+function computeScore(txs: RawTransaction[]) {
+  const credits = txs.filter(t => t.type === "credit");
+  const debits  = txs.filter(t => t.type === "debit");
+
+  const totalIncome      = round2(credits.reduce((s, t) => s + t.amount, 0));
+  const totalExpenditure = round2(debits.reduce((s, t) => s + t.amount, 0));
+  const netCashFlow      = round2(totalIncome - totalExpenditure);
+  const cashFlowRatio    = totalExpenditure === 0 ? 2.0 : round2(totalIncome / totalExpenditure);
+
+  // Group income by YYYY-MM
+  const monthMap: Record<string, { sum: number; count: number }> = {};
+  for (const t of txs) {
+    const ym = t.date.substring(0, 7);
+    if (!monthMap[ym]) monthMap[ym] = { sum: 0, count: 0 };
+    monthMap[ym].sum   += t.type === "credit" ? t.amount : 0;
+    monthMap[ym].count += t.type === "credit" ? 1 : 0;
+  }
+  const months = Object.keys(monthMap).sort();
+  const monthCount = months.length || 1;
+
+  const monthlyIncomes = months.map(m => monthMap[m].sum);
+  const avgMonthlyIncome = round2(totalIncome / monthCount);
+  const avgDailyIncome   = round2(totalIncome / Math.max(daySpan(txs), 1));
+
+  // Income frequency
+  const totalIncomeCount = credits.length;
+  const avgIncomePerMonth = totalIncomeCount / monthCount;
+
+  // Debt count
+  const debtCount = txs.filter(t =>
+    /fuliza|loan repayment|kcb mpesa|okoa jahazi/i.test(t.description)
+  ).length;
+
+  // Peak / lowest income months
+  const incomeByMonth = months.map(m => ({ month: m, amount: monthMap[m].sum, count: monthMap[m].count }));
+  const peak   = incomeByMonth.reduce((a, b) => b.amount > a.amount ? b : a, incomeByMonth[0] ?? { month: "", amount: 0, count: 0 });
+  const lowest = incomeByMonth.reduce((a, b) => b.amount < a.amount ? b : a, incomeByMonth[0] ?? { month: "", amount: 0, count: 0 });
+
+  // ── Factor scores (exact lookup tables) ──
+  const F1 = cashFlowRatio >= 2.0 ? 100 : cashFlowRatio >= 1.5 ? 80 : cashFlowRatio >= 1.2 ? 65 : cashFlowRatio >= 1.0 ? 45 : 20;
+
+  const mean = avgMonthlyIncome;
+  const cv = mean === 0 ? 1 : (() => {
+    const variance = monthlyIncomes.reduce((s, x) => s + Math.pow(x - mean, 2), 0) / monthlyIncomes.length;
+    return Math.sqrt(variance) / mean;
+  })();
+  const F2 = cv <= 0.15 ? 100 : cv <= 0.30 ? 80 : cv <= 0.50 ? 60 : cv <= 0.75 ? 40 : 20;
+
+  const F3 = avgIncomePerMonth >= 10 ? 100 : avgIncomePerMonth >= 6 ? 80 : avgIncomePerMonth >= 3 ? 60 : avgIncomePerMonth >= 1 ? 40 : 20;
+
+  const F4 = debtCount === 0 ? 100 : debtCount <= 2 ? 70 : debtCount <= 5 ? 45 : 20;
+
+  const F5 = monthCount >= 6 ? 100 : monthCount >= 3 ? 75 : monthCount >= 1 ? 50 : 25;
+
+  const finalScore = Math.round(F1 * 0.35 + F2 * 0.25 + F3 * 0.15 + F4 * 0.15 + F5 * 0.10);
+
+  // Grade + credit limit
+  const { grade, label, limitMult } = gradeFor(finalScore);
+  const creditLimit = Math.round(avgMonthlyIncome * limitMult);
+
+  const riskLevel = finalScore >= 80 ? "Low" : finalScore >= 60 ? "Medium" : finalScore >= 40 ? "High" : "Very High";
+  const recommendation = finalScore >= 80 ? "Approve" : finalScore >= 65 ? "Approve with conditions" : finalScore >= 45 ? "Further review required" : "Decline";
+
+  const factors = [
+    { name: "Net Cash Flow Strength", score: F1, weight: 35, impact: impactOf(F1), detail: `Income KES ${fmt(totalIncome)} vs Expenditure KES ${fmt(totalExpenditure)} → ratio ${cashFlowRatio.toFixed(2)}` },
+    { name: "Income Stability",       score: F2, weight: 25, impact: impactOf(F2), detail: `CV=${cv.toFixed(2)} across ${monthCount} month${monthCount !== 1 ? "s" : ""}` },
+    { name: "Income Frequency",       score: F3, weight: 15, impact: impactOf(F3), detail: `Avg ${avgIncomePerMonth.toFixed(1)} income txn${avgIncomePerMonth !== 1 ? "s" : ""}/month` },
+    { name: "Debt Burden",            score: F4, weight: 15, impact: impactOf(F4), detail: `${debtCount} Fuliza/loan event${debtCount !== 1 ? "s" : ""} detected` },
+    { name: "Statement Coverage",     score: F5, weight: 10, impact: impactOf(F5), detail: `${monthCount} month${monthCount !== 1 ? "s" : ""} of data` },
+  ] as const;
+
+  // Daily income map (for schema compat)
+  const dayMap: Record<string, { sum: number; count: number }> = {};
+  for (const t of credits) {
+    if (!dayMap[t.date]) dayMap[t.date] = { sum: 0, count: 0 };
+    dayMap[t.date].sum   += t.amount;
+    dayMap[t.date].count += 1;
+  }
+  const dailyIncome = Object.keys(dayMap).sort().map(d => ({ date: d, amount: round2(dayMap[d].sum), transactionCount: dayMap[d].count }));
+  const monthlyIncome = incomeByMonth.map(m => ({ month: m.month, label: monthLabel(m.month), amount: round2(m.amount), transactionCount: m.count }));
+
+  return {
+    metrics: { totalIncome, totalExpenditure, netCashFlow, cashFlowRatio, avgMonthlyIncome, avgDailyIncome,
+      monthCount, avgIncomePerMonth, debtCount, totalIncomeCount, totalTransactions: txs.length,
+      incomeTransactions: credits.length, expenditureTransactions: debits.length,
+      periodStart: txs[0]?.date ?? "", periodEnd: txs[txs.length - 1]?.date ?? "",
+      peakIncomeMonth: peak.month, lowestIncomeMonth: lowest.month, cv,
+    },
+    score: { finalScore, grade, label, creditLimit, riskLevel, recommendation, factors },
+    dailyIncome,
+    monthlyIncome,
+  };
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function round2(n: number) { return Math.round(n * 100) / 100; }
+function fmt(n: number) { return n.toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function impactOf(score: number): "positive" | "neutral" | "negative" { return score >= 70 ? "positive" : score >= 45 ? "neutral" : "negative"; }
+
+function daySpan(txs: RawTransaction[]) {
+  if (!txs.length) return 1;
+  const dates = txs.map(t => new Date(t.date).getTime()).filter(d => !isNaN(d));
+  return Math.max(1, Math.round((Math.max(...dates) - Math.min(...dates)) / 86_400_000) + 1);
+}
+
+function gradeFor(score: number): { grade: string; label: string; limitMult: number } {
+  if (score >= 90) return { grade: "A+", label: "Excellent Credit",   limitMult: 4 };
+  if (score >= 80) return { grade: "A",  label: "Very Good Credit",   limitMult: 3 };
+  if (score >= 70) return { grade: "B+", label: "Good Credit",        limitMult: 2 };
+  if (score >= 60) return { grade: "B",  label: "Fair-Good Credit",   limitMult: 1.5 };
+  if (score >= 50) return { grade: "C",  label: "Fair Credit",        limitMult: 1 };
+  if (score >= 40) return { grade: "D",  label: "Poor Credit",        limitMult: 0.5 };
+  return { grade: "F", label: "Very Poor Credit", limitMult: 0 };
+}
+
+function monthLabel(ym: string) {
+  const [y, m] = ym.split("-");
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return `${months[parseInt(m, 10) - 1] ?? m} ${y}`;
+}
+
+// ─── Route ────────────────────────────────────────────────────────────────────
 
 router.post("/analyze/mpesa", async (req, res) => {
   const { text } = req.body as { text?: string };
-
   if (!text || typeof text !== "string" || text.trim().length < 10) {
     res.status(400).json({ error: "No valid PDF text content provided." });
     return;
   }
 
-  const userMessage = `Analyze this M-Pesa statement and return the JSON report:\n\n${text.substring(0, 22000)}`;
-
   try {
-    const response = await openai.chat.completions.create({
+    // ── Pass 1: extract raw transactions (deterministic at temperature 0) ──
+    const extractResp = await openai.chat.completions.create({
       model: "gpt-5.4",
-      max_completion_tokens: 6000,
+      temperature: 0,
+      seed: 42,
+      max_completion_tokens: 4000,
       messages: [
-        { role: "system", content: SYSTEM },
-        { role: "user",   content: userMessage },
+        { role: "system", content: EXTRACT_SYSTEM },
+        { role: "user",   content: `Extract all transactions from this M-Pesa statement:\n\n${text.substring(0, 22000)}` },
       ],
     });
 
-    const content = response.choices[0]?.message?.content ?? "";
-
-    let parsed: unknown;
+    const rawContent = extractResp.choices[0]?.message?.content ?? "[]";
+    let transactions: RawTransaction[] = [];
     try {
-      parsed = JSON.parse(content);
+      const arr = JSON.parse(rawContent);
+      transactions = Array.isArray(arr) ? arr : [];
     } catch {
-      const m = content.match(/\{[\s\S]*\}/);
-      if (m) {
-        try { parsed = JSON.parse(m[0]); }
-        catch { res.status(500).json({ error: "AI returned malformed JSON.", raw: content.substring(0, 300) }); return; }
-      } else {
-        res.status(500).json({ error: "AI returned unreadable response.", raw: content.substring(0, 300) });
-        return;
-      }
+      const m = rawContent.match(/\[[\s\S]*\]/);
+      if (m) { try { transactions = JSON.parse(m[0]); } catch { transactions = []; } }
     }
 
-    res.json(parsed);
+    // ── Compute all metrics deterministically on the server ──
+    const { metrics, score, dailyIncome, monthlyIncome } = computeScore(transactions);
+
+    // ── Pass 2: AI generates insights + reasoning from the already-computed numbers ──
+    const insightPrompt = `Statement metrics (already computed — do NOT change these numbers):
+totalIncome=${metrics.totalIncome}, totalExpenditure=${metrics.totalExpenditure},
+netCashFlow=${metrics.netCashFlow}, cashFlowRatio=${metrics.cashFlowRatio},
+avgMonthlyIncome=${metrics.avgMonthlyIncome}, monthCount=${metrics.monthCount},
+incomeFrequency=${metrics.avgIncomePerMonth.toFixed(1)}/month, debtEvents=${metrics.debtCount},
+finalScore=${score.finalScore}, grade=${score.grade}, riskLevel=${score.riskLevel}
+
+Transaction summary (${transactions.length} transactions):
+${transactions.slice(0, 40).map(t => `${t.date} ${t.type} KES ${t.amount} - ${t.description}`).join("\n")}
+
+Write 4–6 behavioral insights as a JSON array.`;
+
+    const [insightsResp] = await Promise.all([
+      openai.chat.completions.create({
+        model: "gpt-5.4",
+        temperature: 0,
+        seed: 42,
+        max_completion_tokens: 1500,
+        messages: [
+          { role: "system", content: INSIGHTS_SYSTEM },
+          { role: "user",   content: insightPrompt },
+        ],
+      }),
+    ]);
+
+    let insights: BehavioralInsight[] = [];
+    const insightContent = insightsResp.choices[0]?.message?.content ?? "[]";
+    try {
+      const arr = JSON.parse(insightContent);
+      insights = Array.isArray(arr) ? arr : [];
+    } catch {
+      const m = insightContent.match(/\[[\s\S]*\]/);
+      if (m) { try { insights = JSON.parse(m[0]); } catch { insights = []; } }
+    }
+
+    // ── Build reasoning string from computed numbers ──
+    const reasoning = `${score.grade} grade based on a cash flow ratio of ${metrics.cashFlowRatio.toFixed(2)} (income KES ${fmt(metrics.totalIncome)} vs expenditure KES ${fmt(metrics.totalExpenditure)}), ` +
+      `averaging KES ${fmt(metrics.avgMonthlyIncome)}/month over ${metrics.monthCount} month${metrics.monthCount !== 1 ? "s" : ""}. ` +
+      `${metrics.debtCount > 0 ? `${metrics.debtCount} debt event${metrics.debtCount > 1 ? "s" : ""} detected, reducing the score.` : "No debt events detected."}`;
+
+    // ── Recent transactions (last 15, newest first) ──
+    const recentTransactions = [...transactions]
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, 15);
+
+    res.json({
+      dailyIncome,
+      monthlyIncome,
+      trustScore: {
+        score: score.finalScore,
+        grade: score.grade,
+        label: score.label,
+        creditLimit: score.creditLimit,
+        reasoning,
+        factors: score.factors,
+        riskLevel: score.riskLevel,
+        recommendation: score.recommendation,
+      },
+      summary: {
+        totalIncome: metrics.totalIncome,
+        totalExpenditure: metrics.totalExpenditure,
+        netCashFlow: metrics.netCashFlow,
+        cashFlowRatio: metrics.cashFlowRatio,
+        averageMonthlyIncome: metrics.avgMonthlyIncome,
+        averageDailyIncome: metrics.avgDailyIncome,
+        peakIncomeMonth: monthLabel(metrics.peakIncomeMonth),
+        lowestIncomeMonth: monthLabel(metrics.lowestIncomeMonth),
+        currency: "KES",
+        periodStart: metrics.periodStart,
+        periodEnd: metrics.periodEnd,
+        totalTransactions: metrics.totalTransactions,
+        incomeTransactions: metrics.incomeTransactions,
+        expenditureTransactions: metrics.expenditureTransactions,
+      },
+      behavioralInsights: insights,
+      recentTransactions,
+    });
   } catch (err: any) {
     req.log.error({ err }, "Analysis failed");
     res.status(500).json({ error: err.message || "Analysis failed. Please try again." });
