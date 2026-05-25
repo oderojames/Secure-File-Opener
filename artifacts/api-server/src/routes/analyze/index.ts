@@ -6,15 +6,16 @@ const router = Router();
 function getOpenAIClient() {
   const apiKey = process.env["OPENAI_API_KEY"];
   if (!apiKey) throw new Error("OPENAI_API_KEY is not set.");
-  const isOpenRouter = apiKey.startsWith("sk-or-");
-  return new OpenAI({
-    apiKey,
-    ...(isOpenRouter && { baseURL: "https://openrouter.ai/api/v1" }),
-  });
+  let baseURL: string | undefined;
+  if (apiKey.startsWith("sk-or-")) baseURL = "https://openrouter.ai/api/v1";
+  if (apiKey.startsWith("nvapi-")) baseURL = "https://integrate.api.nvidia.com/v1";
+  return new OpenAI({ apiKey, ...(baseURL && { baseURL }) });
 }
 
 function getModel(apiKey: string) {
-  return apiKey.startsWith("sk-or-") ? "openai/gpt-4o" : "gpt-4o";
+  if (apiKey.startsWith("sk-or-")) return "openai/gpt-4o";
+  if (apiKey.startsWith("nvapi-")) return "nvidia/llama-3.3-nemotron-super-49b-v1";
+  return "gpt-4o";
 }
 
 router.post("/analyze/mpesa", async (req, res) => {
@@ -82,7 +83,7 @@ ${text.substring(0, 20000)}`;
     const openai = getOpenAIClient();
     const response = await openai.chat.completions.create({
       model: getModel(apiKey),
-      max_tokens: 3500,
+      max_tokens: 2000,
       temperature: 0,
       response_format: { type: "json_object" },
       messages: [{ role: "user", content: prompt }],
