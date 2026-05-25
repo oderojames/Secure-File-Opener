@@ -3,7 +3,7 @@ import { openai } from "@workspace/integrations-openai-ai-server";
 
 const router = Router();
 
-router.post("/api/analyze/mpesa", async (req, res) => {
+router.post("/analyze/mpesa", async (req, res) => {
   const { text } = req.body as { text?: string };
 
   if (!text || typeof text !== "string" || text.trim().length < 10) {
