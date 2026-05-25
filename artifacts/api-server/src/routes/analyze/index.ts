@@ -57,6 +57,23 @@ finalScore = round( (NCF×0.35) + (Stability×0.25) + (Frequency×0.15) + (Debt�
 riskLevel:  score≥80→Low | score≥60→Medium | score≥40→High | else→Very High
 recommendation: score≥80→"Approve" | score≥65→"Approve with conditions" | score≥45→"Further review required" | else→"Decline"
 
+=== BEHAVIORAL INSIGHTS (4–6 items) ===
+Identify patterns from the transactions. Examples of what to look for:
+- Saving behavior: does balance grow after income? Does the user save a portion?
+- Spending patterns: large/frequent withdrawals, bill payments, airtime top-ups
+- Income source diversity: one employer, multiple clients, business receipts
+- Debt signals: Fuliza draws, OKoa Jahazi, KCB M-Pesa repayments
+- Payment regularity: does the user pay bills on time? same dates each month?
+- Risk behaviors: gambling, frequent cash-outs immediately after receiving money
+
+=== RECENT TRANSACTIONS (last 15 in reverse chronological order) ===
+Extract the 15 most recent transactions (any type). For each:
+- date: YYYY-MM-DD
+- description: clean short label (name of sender/recipient or transaction type, max 40 chars)
+- amount: numeric, always positive
+- type: "credit" (money in) | "debit" (money out)
+- category: one of: "Income", "Bill Payment", "Transfer", "Withdrawal", "Airtime", "Loan", "Business", "Other"
+
 === OUTPUT SCHEMA (return exactly this) ===
 {
   "dailyIncome": [{ "date": "YYYY-MM-DD", "amount": 0.00, "transactionCount": 0 }],
@@ -92,10 +109,16 @@ recommendation: score≥80→"Approve" | score≥65→"Approve with conditions" 
     "totalTransactions": 0,
     "incomeTransactions": 0,
     "expenditureTransactions": 0
-  }
+  },
+  "behavioralInsights": [
+    { "type": "positive|negative|warning", "title": "Short headline (5–7 words)", "description": "1–2 sentences with specific evidence from the data." }
+  ],
+  "recentTransactions": [
+    { "date": "YYYY-MM-DD", "description": "Sender/recipient or type", "amount": 0.00, "type": "credit|debit", "category": "Income|Bill Payment|Transfer|Withdrawal|Airtime|Loan|Business|Other" }
+  ]
 }
 
-RULES: Parse all date formats. Strip commas from numbers. If no transactions found, return zeroed schema with score 0, grade F, reasoning "No transaction data detected."`;
+RULES: Parse all date formats. Strip commas from numbers. recentTransactions must be sorted newest-first. If no transactions found, return zeroed schema with score 0, grade F, empty arrays, reasoning "No transaction data detected."`;
 
 router.post("/analyze/mpesa", async (req, res) => {
   const { text } = req.body as { text?: string };

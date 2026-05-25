@@ -5,6 +5,8 @@ import {
   Lock, Trash2, UploadCloud, ShieldAlert, TrendingUp, Calendar,
   BarChart3, AlertCircle, CheckCircle2, MinusCircle, FileText,
   ShieldCheck, BadgeAlert, ThumbsUp, ThumbsDown, Minus,
+  ArrowDownLeft, ArrowUpRight, Lightbulb, AlertTriangle, XCircle,
+  Banknote, Phone, CreditCard, RefreshCw, ShoppingBag, Building2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,9 +36,25 @@ interface Summary {
   incomeTransactions: number; expenditureTransactions: number;
 }
 
+interface BehavioralInsight {
+  type: 'positive' | 'negative' | 'warning';
+  title: string;
+  description: string;
+}
+
+interface RecentTransaction {
+  date: string;
+  description: string;
+  amount: number;
+  type: 'credit' | 'debit';
+  category: string;
+}
+
 interface AnalysisResult {
   dailyIncome: DailyIncome[]; monthlyIncome: MonthlyIncome[];
   trustScore: TrustScore; summary: Summary;
+  behavioralInsights?: BehavioralInsight[];
+  recentTransactions?: RecentTransaction[];
 }
 
 function fmt(n: number, currency = 'KES') {
@@ -99,21 +117,54 @@ function FactorBar({ factor }: { factor: TrustFactor }) {
   );
 }
 
-function MonthlyChart({ data, currency }: { data: MonthlyIncome[]; currency: string }) {
-  if (!data.length) return <p className="text-muted-foreground text-sm text-center py-6">No monthly data</p>;
-  const max = Math.max(...data.map(d => d.amount), 1);
+const CATEGORY_ICONS: Record<string, React.FC<{ size: number; className?: string }>> = {
+  Income: TrendingUp, 'Bill Payment': Building2, Transfer: ArrowUpRight,
+  Withdrawal: Banknote, Airtime: Phone, Loan: CreditCard,
+  Business: ShoppingBag, Other: RefreshCw,
+};
+
+function InsightCard({ insight }: { insight: BehavioralInsight }) {
+  const isPos = insight.type === 'positive';
+  const isNeg = insight.type === 'negative';
+  const Icon = isPos ? Lightbulb : isNeg ? XCircle : AlertTriangle;
+  const colors = isPos
+    ? { border: 'border-green-500/30', bg: 'bg-green-500/8', icon: 'text-green-400', title: 'text-green-300' }
+    : isNeg
+    ? { border: 'border-red-500/30', bg: 'bg-red-500/8', icon: 'text-red-400', title: 'text-red-300' }
+    : { border: 'border-amber-500/30', bg: 'bg-amber-500/8', icon: 'text-amber-400', title: 'text-amber-300' };
   return (
-    <div className="flex items-end gap-2 h-32 w-full pb-1">
-      {data.map(d => {
-        const pct = Math.max((d.amount / max) * 100, 4);
-        return (
-          <div key={d.month} className="flex flex-col items-center gap-1 min-w-[36px] flex-1">
-            <span className="text-[9px] text-muted-foreground">{(d.amount / 1000).toFixed(1)}k</span>
-            <div className="w-full rounded-t" style={{ height: `${pct}%`, background: 'hsl(221 83% 53%)' }} />
-            <span className="text-[9px] text-muted-foreground">{d.label.substring(0, 3)}</span>
-          </div>
-        );
-      })}
+    <div className={`flex gap-3 p-3 rounded-lg border ${colors.border} ${colors.bg}`}>
+      <Icon size={15} className={`mt-0.5 shrink-0 ${colors.icon}`} />
+      <div>
+        <p className={`text-xs font-semibold mb-0.5 ${colors.title}`}>{insight.title}</p>
+        <p className="text-[11px] text-muted-foreground leading-relaxed">{insight.description}</p>
+      </div>
+    </div>
+  );
+}
+
+function TxRow({ tx, currency }: { tx: RecentTransaction; currency: string }) {
+  const isCredit = tx.type === 'credit';
+  const CatIcon = CATEGORY_ICONS[tx.category] ?? RefreshCw;
+  return (
+    <div className="flex items-center gap-3 py-2.5 border-b border-border last:border-0">
+      <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${isCredit ? 'bg-green-500/15' : 'bg-red-500/12'}`}>
+        {isCredit
+          ? <ArrowDownLeft size={13} className="text-green-400" />
+          : <ArrowUpRight size={13} className="text-red-400" />}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-medium text-foreground truncate">{tx.description}</p>
+        <div className="flex items-center gap-1.5 mt-0.5">
+          <CatIcon size={10} className="text-muted-foreground" />
+          <span className="text-[10px] text-muted-foreground">{tx.category}</span>
+          <span className="text-[10px] text-muted-foreground">·</span>
+          <span className="text-[10px] text-muted-foreground">{tx.date}</span>
+        </div>
+      </div>
+      <span className={`text-xs font-bold shrink-0 ${isCredit ? 'text-green-400' : 'text-red-400'}`}>
+        {isCredit ? '+' : '-'}{fmt(tx.amount, currency)}
+      </span>
     </div>
   );
 }
@@ -436,47 +487,44 @@ export default function Vault() {
                 </div>
               </div>
 
-              {/* Monthly income chart */}
-              <div className="bg-card border border-border rounded-xl p-5 space-y-4">
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Monthly Income</h3>
-                <MonthlyChart data={analysisResult.monthlyIncome} currency={currency} />
-                <div className="divide-y divide-border max-h-48 overflow-y-auto">
-                  {analysisResult.monthlyIncome.map(m => (
-                    <div key={m.month} className="flex items-center justify-between py-2">
-                      <span className="text-xs text-muted-foreground">{m.label}</span>
-                      <div className="flex items-center gap-3">
-                        <span className="text-[10px] text-muted-foreground">{m.transactionCount} txns</span>
-                        <span className="text-xs font-semibold">{fmt(m.amount, currency)}</span>
-                      </div>
-                    </div>
-                  ))}
-                  {!analysisResult.monthlyIncome.length && <p className="text-xs text-muted-foreground py-3 text-center">No monthly data</p>}
+              {/* Behavioral Insights */}
+              <div className="bg-card border border-border rounded-xl p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <Lightbulb size={14} className="text-amber-400" />
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Behavioral Insights</h3>
                 </div>
-                {sm.peakIncomeMonth && (
-                  <div className="flex gap-4 pt-1 border-t border-border">
-                    <div><p className="text-[10px] text-muted-foreground">Peak Month</p><p className="text-xs font-semibold text-green-400">{sm.peakIncomeMonth}</p></div>
-                    {sm.lowestIncomeMonth && <div><p className="text-[10px] text-muted-foreground">Lowest Month</p><p className="text-xs font-semibold text-red-400">{sm.lowestIncomeMonth}</p></div>}
+                {analysisResult.behavioralInsights && analysisResult.behavioralInsights.length > 0 ? (
+                  <div className="space-y-2.5">
+                    {analysisResult.behavioralInsights.map((insight, i) => (
+                      <InsightCard key={i} insight={insight} />
+                    ))}
                   </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground text-center py-4">No behavioral data available</p>
                 )}
               </div>
             </div>
 
-            {/* Daily income */}
+            {/* Recent Transactions */}
             <div className="bg-card border border-border rounded-xl p-5">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">Daily Income Breakdown</h3>
-              {analysisResult.dailyIncome.length > 0 ? (
-                <div className="divide-y divide-border max-h-64 overflow-y-auto">
-                  {analysisResult.dailyIncome.map(d => (
-                    <div key={d.date} className="flex items-center justify-between py-2">
-                      <span className="text-xs text-muted-foreground">{d.date}</span>
-                      <div className="flex items-center gap-4">
-                        <span className="text-[10px] text-muted-foreground">{d.transactionCount} txn{d.transactionCount !== 1 ? 's' : ''}</span>
-                        <span className="text-xs font-semibold text-green-400">{fmt(d.amount, currency)}</span>
-                      </div>
-                    </div>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <FileText size={14} className="text-muted-foreground" />
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recent Transactions</h3>
+                </div>
+                {analysisResult.recentTransactions && analysisResult.recentTransactions.length > 0 && (
+                  <span className="text-[10px] text-muted-foreground">{analysisResult.recentTransactions.length} shown</span>
+                )}
+              </div>
+              {analysisResult.recentTransactions && analysisResult.recentTransactions.length > 0 ? (
+                <div className="max-h-72 overflow-y-auto pr-1">
+                  {analysisResult.recentTransactions.map((tx, i) => (
+                    <TxRow key={i} tx={tx} currency={currency} />
                   ))}
                 </div>
-              ) : <p className="text-xs text-muted-foreground text-center py-4">No daily data available</p>}
+              ) : (
+                <p className="text-xs text-muted-foreground text-center py-4">No transaction data available</p>
+              )}
             </div>
 
           </div>
