@@ -7,6 +7,7 @@ import {
   ShieldCheck, BadgeAlert, ThumbsUp, ThumbsDown, Minus,
   ArrowDownLeft, ArrowUpRight, Lightbulb, AlertTriangle, XCircle,
   Banknote, Phone, CreditCard, RefreshCw, ShoppingBag, Building2,
+  LogOut,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,6 +16,7 @@ import {
   collection, doc, getDocs, setDoc, deleteDoc, query, orderBy,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { useAuth } from '@/contexts/AuthContext';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -201,20 +203,26 @@ function RecommendationBadge({ rec }: { rec: string }) {
   );
 }
 
-async function fsLoadAnalyses(): Promise<StoredAnalysis[]> {
-  const snap = await getDocs(query(collection(db, 'vault_analyses'), orderBy('dateAdded', 'desc')));
+function userCol(uid: string) { return collection(db, 'users', uid, 'vault_analyses'); }
+function userDoc(uid: string, id: string) { return doc(db, 'users', uid, 'vault_analyses', id); }
+
+async function fsLoadAnalyses(uid: string): Promise<StoredAnalysis[]> {
+  const snap = await getDocs(query(userCol(uid), orderBy('dateAdded', 'desc')));
   return snap.docs.map(d => d.data() as StoredAnalysis);
 }
 
-async function fsSaveAnalysis(analysis: StoredAnalysis): Promise<void> {
-  await setDoc(doc(db, 'vault_analyses', analysis.id), analysis);
+async function fsSaveAnalysis(uid: string, analysis: StoredAnalysis): Promise<void> {
+  await setDoc(userDoc(uid, analysis.id), analysis);
 }
 
-async function fsDeleteAnalysis(id: string): Promise<void> {
-  await deleteDoc(doc(db, 'vault_analyses', id));
+async function fsDeleteAnalysis(uid: string, id: string): Promise<void> {
+  await deleteDoc(userDoc(uid, id));
 }
 
 export default function Vault() {
+  const { user, signOut } = useAuth();
+  const uid = user!.uid;
+
   const [analyses, setAnalyses] = useState<StoredAnalysis[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loadingAnalyses, setLoadingAnalyses] = useState(true);
@@ -232,10 +240,10 @@ export default function Vault() {
 
   useEffect(() => {
     document.documentElement.classList.add('dark');
-    fsLoadAnalyses()
+    fsLoadAnalyses(uid)
       .then(a => { setAnalyses(a); setLoadingAnalyses(false); })
       .catch(() => setLoadingAnalyses(false));
-  }, []);
+  }, [uid]);
 
   const selectedAnalysis = analyses.find(a => a.id === selectedId) ?? null;
   const analysisResult = selectedAnalysis?.result ?? null;
@@ -284,7 +292,7 @@ export default function Vault() {
         dateAdded: new Date().toISOString(),
         result,
       };
-      await fsSaveAnalysis(entry);
+      await fsSaveAnalysis(uid, entry);
       setAnalyses(prev => [entry, ...prev]);
       setSelectedId(entry.id);
       setPendingPdf(null);
@@ -358,13 +366,32 @@ export default function Vault() {
 
       {/* Sidebar */}
       <div className="w-64 border-r border-border bg-card flex flex-col shrink-0">
-        <div className="p-4 border-b border-border flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-primary/20 flex items-center justify-center text-primary">
-            <ShieldCheck size={17} />
+        <div className="p-4 border-b border-border">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-8 h-8 rounded bg-primary/20 flex items-center justify-center text-primary shrink-0">
+              <ShieldCheck size={17} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h1 className="font-bold tracking-widest text-xs text-foreground">CREDIT VAULT</h1>
+              <p className="text-[10px] text-muted-foreground">M-Pesa Creditworthiness</p>
+            </div>
           </div>
-          <div>
-            <h1 className="font-bold tracking-widest text-xs text-foreground">CREDIT VAULT</h1>
-            <p className="text-[10px] text-muted-foreground">M-Pesa Creditworthiness</p>
+          <div className="flex items-center gap-2 bg-muted/60 rounded-lg px-2.5 py-2">
+            <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
+              <span className="text-[10px] font-bold text-primary">
+                {(user?.displayName || user?.email || 'R')[0].toUpperCase()}
+              </span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-medium text-foreground truncate">
+                {user?.displayName || user?.email?.split('@')[0] || 'Retailer'}
+              </p>
+              <p className="text-[9px] text-primary truncate">Retailer</p>
+            </div>
+            <button onClick={signOut} title="Sign out"
+              className="text-muted-foreground hover:text-destructive transition-colors shrink-0">
+              <LogOut size={13} />
+            </button>
           </div>
         </div>
 
@@ -399,7 +426,7 @@ export default function Vault() {
                   className="opacity-0 group-hover:opacity-100 h-6 w-6 text-muted-foreground hover:text-destructive"
                   onClick={async e => {
                     e.stopPropagation();
-                    await fsDeleteAnalysis(a.id);
+                    await fsDeleteAnalysis(uid, a.id);
                     setAnalyses(prev => prev.filter(x => x.id !== a.id));
                     if (selectedId === a.id) setSelectedId(null);
                   }}>
