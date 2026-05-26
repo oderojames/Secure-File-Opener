@@ -11,6 +11,11 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
+import {
+  collection, doc, getDocs, setDoc, query, orderBy,
+  writeBatch,
+} from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -193,6 +198,42 @@ function RecommendationBadge({ rec }: { rec: string }) {
   );
 }
 
+const CHUNK_SIZE = 500_000;
+
+async function fsLoadFiles(): Promise<StoredFile[]> {
+  const snap = await getDocs(query(collection(db, 'vault_files'), orderBy('dateAdded', 'asc')));
+  return snap.docs.map(d => ({ ...(d.data() as Omit<StoredFile, 'data'>), data: '' }));
+}
+
+async function fsLoadFileData(id: string): Promise<string> {
+  const chunksSnap = await getDocs(query(collection(db, 'vault_files', id, 'chunks'), orderBy('index', 'asc')));
+  return chunksSnap.docs.map(d => (d.data() as { data: string }).data).join('');
+}
+
+async function fsSaveFile(file: StoredFile): Promise<void> {
+  const { data, ...meta } = file;
+  await setDoc(doc(db, 'vault_files', file.id), meta);
+  const batch = writeBatch(db);
+  const chunks = [];
+  for (let i = 0; i < data.length; i += CHUNK_SIZE) chunks.push(data.slice(i, i + CHUNK_SIZE));
+  chunks.forEach((chunk, index) => {
+    batch.set(doc(db, 'vault_files', file.id, 'chunks', String(index)), { index, data: chunk });
+  });
+  await batch.commit();
+}
+
+async function fsUpdateMeta(id: string, patch: Partial<Omit<StoredFile, 'data' | 'id'>>): Promise<void> {
+  await setDoc(doc(db, 'vault_files', id), patch, { merge: true });
+}
+
+async function fsDeleteFile(id: string): Promise<void> {
+  const chunksSnap = await getDocs(collection(db, 'vault_files', id, 'chunks'));
+  const batch = writeBatch(db);
+  chunksSnap.docs.forEach(d => batch.delete(d.ref));
+  batch.delete(doc(db, 'vault_files', id));
+  await batch.commit();
+}
+
 export default function Vault() {
   const [files, setFiles] = useState<StoredFile[]>([]);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
@@ -204,15 +245,13 @@ export default function Vault() {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [loadingFiles, setLoadingFiles] = useState(true);
   const { toast } = useToast();
 
   useEffect(() => {
     document.documentElement.classList.add('dark');
-    const stored = localStorage.getItem('vault_files');
-    if (stored) { try { setFiles(JSON.parse(stored)); } catch {} }
+    fsLoadFiles().then(f => { setFiles(f); setLoadingFiles(false); }).catch(() => setLoadingFiles(false));
   }, []);
-
-  const saveFiles = (f: StoredFile[]) => { setFiles(f); localStorage.setItem('vault_files', JSON.stringify(f)); };
 
   const extractText = async (base64: string, password?: string): Promise<string> => {
     const binary = atob(base64);
@@ -256,14 +295,19 @@ export default function Vault() {
     if (!file) return;
     setAnalysisResult(null); setAnalysisError(null);
     try {
-      const text = await extractText(file.data, password);
-      if (password && !file.isEncrypted) saveFiles(files.map(f => f.id === fileId ? { ...f, isEncrypted: true } : f));
+      const data = await fsLoadFileData(fileId);
+      const text = await extractText(data, password);
+      if (password && !file.isEncrypted) {
+        await fsUpdateMeta(fileId, { isEncrypted: true });
+        setFiles(prev => prev.map(f => f.id === fileId ? { ...f, isEncrypted: true } : f));
+      }
       await analyzeText(text);
     } catch (e: any) {
       if (e.name === 'PasswordException') {
         setPasswordRequired(true);
         setPasswordError(e.code === 2 ? 'Incorrect password' : null);
-        saveFiles(files.map(f => f.id === fileId ? { ...f, isEncrypted: true } : f));
+        await fsUpdateMeta(fileId, { isEncrypted: true });
+        setFiles(prev => prev.map(f => f.id === fileId ? { ...f, isEncrypted: true } : f));
       } else { setAnalysisError(e.message || 'Failed to read PDF'); }
     }
   };
@@ -284,15 +328,19 @@ export default function Vault() {
   const handleFileAdd = useCallback((file: File) => {
     if (file.type !== 'application/pdf') { toast({ title: 'Invalid file', description: 'Please upload a PDF.', variant: 'destructive' }); return; }
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const base64 = (reader.result as string).split(',')[1];
       const nf: StoredFile = { id: crypto.randomUUID(), name: file.name, size: file.size, dateAdded: new Date().toISOString(), data: base64 };
-      const updated = [...files, nf];
-      saveFiles(updated);
-      setSelectedFileId(nf.id);
+      try {
+        await fsSaveFile(nf);
+        setFiles(prev => [...prev, { ...nf, data: '' }]);
+        setSelectedFileId(nf.id);
+      } catch (e: any) {
+        toast({ title: 'Upload failed', description: e.message || 'Could not save to Firestore.', variant: 'destructive' });
+      }
     };
     reader.readAsDataURL(file);
-  }, [files]);
+  }, [toast]);
 
   const handlePaste = useCallback((e: ClipboardEvent) => {
     for (const item of Array.from(e.clipboardData?.items || [])) {
@@ -324,7 +372,12 @@ export default function Vault() {
           </div>
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
-          {files.length === 0 ? (
+          {loadingFiles ? (
+            <div className="text-center p-6 text-muted-foreground">
+              <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+              <p className="text-xs">Loading...</p>
+            </div>
+          ) : files.length === 0 ? (
             <div className="text-center p-6 text-muted-foreground">
               <ShieldAlert className="mx-auto mb-3 opacity-20" size={28} />
               <p className="text-sm">No statements.</p>
@@ -342,7 +395,7 @@ export default function Vault() {
               </div>
               <Button variant="ghost" size="icon" data-testid={`remove-${f.id}`}
                 className="opacity-0 group-hover:opacity-100 h-6 w-6 text-muted-foreground hover:text-destructive"
-                onClick={e => { e.stopPropagation(); const n = files.filter(x => x.id !== f.id); saveFiles(n); if (selectedFileId === f.id) setSelectedFileId(null); }}>
+                onClick={async e => { e.stopPropagation(); await fsDeleteFile(f.id); setFiles(prev => prev.filter(x => x.id !== f.id)); if (selectedFileId === f.id) setSelectedFileId(null); }}>
                 <Trash2 size={11} />
               </Button>
             </div>

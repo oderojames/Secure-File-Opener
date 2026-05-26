@@ -75,6 +75,7 @@
     "zod": "catalog:"
   },
   "dependencies": {
+    "firebase": "^12.13.0",
     "pdfjs-dist": "^5.7.284"
   }
 }
