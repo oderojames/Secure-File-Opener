@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import {
@@ -12,16 +12,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import {
-  collection, doc, getDocs, setDoc, query, orderBy,
-  writeBatch,
+  collection, doc, getDocs, setDoc, deleteDoc, query, orderBy,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
-
-interface StoredFile {
-  id: string; name: string; size: number; dateAdded: string; data: string; isEncrypted?: boolean;
-}
 
 interface DailyIncome { date: string; amount: number; transactionCount: number; }
 interface MonthlyIncome { month: string; label: string; amount: number; transactionCount: number; }
@@ -60,6 +55,14 @@ interface AnalysisResult {
   trustScore: TrustScore; summary: Summary;
   behavioralInsights?: BehavioralInsight[];
   recentTransactions?: RecentTransaction[];
+}
+
+interface StoredAnalysis {
+  id: string;
+  name: string;
+  size: number;
+  dateAdded: string;
+  result: AnalysisResult;
 }
 
 function fmt(n: number, currency = 'KES') {
@@ -198,60 +201,47 @@ function RecommendationBadge({ rec }: { rec: string }) {
   );
 }
 
-const CHUNK_SIZE = 500_000;
-
-async function fsLoadFiles(): Promise<StoredFile[]> {
-  const snap = await getDocs(query(collection(db, 'vault_files'), orderBy('dateAdded', 'asc')));
-  return snap.docs.map(d => ({ ...(d.data() as Omit<StoredFile, 'data'>), data: '' }));
+async function fsLoadAnalyses(): Promise<StoredAnalysis[]> {
+  const snap = await getDocs(query(collection(db, 'vault_analyses'), orderBy('dateAdded', 'desc')));
+  return snap.docs.map(d => d.data() as StoredAnalysis);
 }
 
-async function fsLoadFileData(id: string): Promise<string> {
-  const chunksSnap = await getDocs(query(collection(db, 'vault_files', id, 'chunks'), orderBy('index', 'asc')));
-  return chunksSnap.docs.map(d => (d.data() as { data: string }).data).join('');
+async function fsSaveAnalysis(analysis: StoredAnalysis): Promise<void> {
+  await setDoc(doc(db, 'vault_analyses', analysis.id), analysis);
 }
 
-async function fsSaveFile(file: StoredFile): Promise<void> {
-  const { data, ...meta } = file;
-  await setDoc(doc(db, 'vault_files', file.id), meta);
-  const batch = writeBatch(db);
-  const chunks = [];
-  for (let i = 0; i < data.length; i += CHUNK_SIZE) chunks.push(data.slice(i, i + CHUNK_SIZE));
-  chunks.forEach((chunk, index) => {
-    batch.set(doc(db, 'vault_files', file.id, 'chunks', String(index)), { index, data: chunk });
-  });
-  await batch.commit();
-}
-
-async function fsUpdateMeta(id: string, patch: Partial<Omit<StoredFile, 'data' | 'id'>>): Promise<void> {
-  await setDoc(doc(db, 'vault_files', id), patch, { merge: true });
-}
-
-async function fsDeleteFile(id: string): Promise<void> {
-  const chunksSnap = await getDocs(collection(db, 'vault_files', id, 'chunks'));
-  const batch = writeBatch(db);
-  chunksSnap.docs.forEach(d => batch.delete(d.ref));
-  batch.delete(doc(db, 'vault_files', id));
-  await batch.commit();
+async function fsDeleteAnalysis(id: string): Promise<void> {
+  await deleteDoc(doc(db, 'vault_analyses', id));
 }
 
 export default function Vault() {
-  const [files, setFiles] = useState<StoredFile[]>([]);
-  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
+  const [analyses, setAnalyses] = useState<StoredAnalysis[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [loadingAnalyses, setLoadingAnalyses] = useState(true);
+
+  const [pendingPdf, setPendingPdf] = useState<{ data: string; name: string; size: number } | null>(null);
   const [passwordRequired, setPasswordRequired] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordCallback, setPasswordCallback] = useState<((pwd: string) => void) | null>(null);
+
   const [analyzing, setAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [loadingFiles, setLoadingFiles] = useState(true);
   const { toast } = useToast();
 
   useEffect(() => {
     document.documentElement.classList.add('dark');
-    fsLoadFiles().then(f => { setFiles(f); setLoadingFiles(false); }).catch(() => setLoadingFiles(false));
+    fsLoadAnalyses()
+      .then(a => { setAnalyses(a); setLoadingAnalyses(false); })
+      .catch(() => setLoadingAnalyses(false));
   }, []);
+
+  const selectedAnalysis = analyses.find(a => a.id === selectedId) ?? null;
+  const analysisResult = selectedAnalysis?.result ?? null;
+  const currency = analysisResult?.summary?.currency || 'KES';
+  const ts = analysisResult?.trustScore;
+  const sm = analysisResult?.summary;
 
   const extractText = async (base64: string, password?: string): Promise<string> => {
     const binary = atob(base64);
@@ -263,81 +253,79 @@ export default function Vault() {
       setPasswordError(reason === 2 ? 'Incorrect password' : null);
       setPasswordCallback(() => cb);
     };
-    const doc = await task.promise;
+    const pdfDoc = await task.promise;
     setPasswordRequired(false); setPasswordError(null);
     let text = '';
-    for (let i = 1; i <= doc.numPages; i++) {
-      const page = await doc.getPage(i);
+    for (let i = 1; i <= pdfDoc.numPages; i++) {
+      const page = await pdfDoc.getPage(i);
       const content = await page.getTextContent();
       text += content.items.map((x: any) => x.str).join(' ') + '\n';
     }
     return text;
   };
 
-  const analyzeText = async (text: string) => {
-    setAnalyzing(true); setAnalysisError(null); setAnalysisResult(null);
+  const analyzeAndSave = async (pdfData: string, fileName: string, fileSize: number, password?: string) => {
+    setAnalyzing(true); setAnalysisError(null);
     try {
+      const text = await extractText(pdfData, password);
       const res = await fetch('/api/analyze/mpesa', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
       });
-      if (!res.ok) { const e = await res.json().catch(() => ({ error: 'Unknown error' })); throw new Error(e.error || `Error ${res.status}`); }
-      setAnalysisResult(await res.json());
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(e.error || `Error ${res.status}`);
+      }
+      const result: AnalysisResult = await res.json();
+      const entry: StoredAnalysis = {
+        id: crypto.randomUUID(),
+        name: fileName,
+        size: fileSize,
+        dateAdded: new Date().toISOString(),
+        result,
+      };
+      await fsSaveAnalysis(entry);
+      setAnalyses(prev => [entry, ...prev]);
+      setSelectedId(entry.id);
+      setPendingPdf(null);
     } catch (e: any) {
-      setAnalysisError(e.message || 'Analysis failed');
+      if (e.name === 'PasswordException') {
+        setPasswordRequired(true);
+        setPasswordError(e.code === 2 ? 'Incorrect password' : null);
+      } else {
+        setAnalysisError(e.message || 'Analysis failed');
+      }
     } finally {
       setAnalyzing(false);
     }
   };
 
-  const loadAndAnalyze = async (fileId: string, password?: string) => {
-    const file = files.find(f => f.id === fileId);
-    if (!file) return;
-    setAnalysisResult(null); setAnalysisError(null);
-    try {
-      const data = await fsLoadFileData(fileId);
-      const text = await extractText(data, password);
-      if (password && !file.isEncrypted) {
-        await fsUpdateMeta(fileId, { isEncrypted: true });
-        setFiles(prev => prev.map(f => f.id === fileId ? { ...f, isEncrypted: true } : f));
-      }
-      await analyzeText(text);
-    } catch (e: any) {
-      if (e.name === 'PasswordException') {
-        setPasswordRequired(true);
-        setPasswordError(e.code === 2 ? 'Incorrect password' : null);
-        await fsUpdateMeta(fileId, { isEncrypted: true });
-        setFiles(prev => prev.map(f => f.id === fileId ? { ...f, isEncrypted: true } : f));
-      } else { setAnalysisError(e.message || 'Failed to read PDF'); }
+  const submitPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingPdf) return;
+    if (passwordCallback) {
+      setPasswordCallback(null);
+      passwordCallback(passwordInput);
+    } else {
+      setPasswordRequired(false);
+      analyzeAndSave(pendingPdf.data, pendingPdf.name, pendingPdf.size, passwordInput);
     }
   };
 
-  useEffect(() => {
-    if (selectedFileId) {
-      setPasswordRequired(false); setPasswordError(null); setPasswordInput(''); setPasswordCallback(null);
-      loadAndAnalyze(selectedFileId);
-    } else { setAnalysisResult(null); setAnalysisError(null); }
-  }, [selectedFileId]);
-
-  const submitPassword = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (passwordCallback) { setPasswordCallback(null); passwordCallback(passwordInput); }
-    else if (selectedFileId) { setPasswordRequired(false); loadAndAnalyze(selectedFileId, passwordInput); }
-  };
-
   const handleFileAdd = useCallback((file: File) => {
-    if (file.type !== 'application/pdf') { toast({ title: 'Invalid file', description: 'Please upload a PDF.', variant: 'destructive' }); return; }
+    if (file.type !== 'application/pdf') {
+      toast({ title: 'Invalid file', description: 'Please upload a PDF.', variant: 'destructive' });
+      return;
+    }
     const reader = new FileReader();
-    reader.onload = async () => {
+    reader.onload = () => {
       const base64 = (reader.result as string).split(',')[1];
-      const nf: StoredFile = { id: crypto.randomUUID(), name: file.name, size: file.size, dateAdded: new Date().toISOString(), data: base64 };
-      try {
-        await fsSaveFile(nf);
-        setFiles(prev => [...prev, { ...nf, data: '' }]);
-        setSelectedFileId(nf.id);
-      } catch (e: any) {
-        toast({ title: 'Upload failed', description: e.message || 'Could not save to Firestore.', variant: 'destructive' });
-      }
+      setSelectedId(null);
+      setAnalysisError(null);
+      setPasswordRequired(false);
+      setPasswordInput('');
+      setPendingPdf({ data: base64, name: file.name, size: file.size });
+      analyzeAndSave(base64, file.name, file.size);
     };
     reader.readAsDataURL(file);
   }, [toast]);
@@ -348,14 +336,22 @@ export default function Vault() {
     }
   }, [handleFileAdd]);
 
-  useEffect(() => { window.addEventListener('paste', handlePaste); return () => window.removeEventListener('paste', handlePaste); }, [handlePaste]);
+  useEffect(() => {
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [handlePaste]);
 
-  const openPicker = () => { const i = document.createElement('input'); i.type = 'file'; i.accept = 'application/pdf'; i.onchange = (e: any) => { if (e.target.files?.[0]) handleFileAdd(e.target.files[0]); }; i.click(); };
+  const openPicker = () => {
+    const i = document.createElement('input');
+    i.type = 'file'; i.accept = 'application/pdf';
+    i.onchange = (e: any) => { if (e.target.files?.[0]) handleFileAdd(e.target.files[0]); };
+    i.click();
+  };
+
   const formatSize = (b: number) => (b / 1024 / 1024).toFixed(2) + ' MB';
-  const selectedFile = files.find(f => f.id === selectedFileId);
-  const currency = analysisResult?.summary?.currency || 'KES';
-  const ts = analysisResult?.trustScore;
-  const sm = analysisResult?.summary;
+  const formatDate = (iso: string) => new Date(iso).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' });
+
+  const isUploading = pendingPdf !== null;
 
   return (
     <div className="flex h-screen w-full bg-background text-foreground overflow-hidden">
@@ -371,39 +367,52 @@ export default function Vault() {
             <p className="text-[10px] text-muted-foreground">M-Pesa Creditworthiness</p>
           </div>
         </div>
+
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
-          {loadingFiles ? (
+          {loadingAnalyses ? (
             <div className="text-center p-6 text-muted-foreground">
               <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-2" />
               <p className="text-xs">Loading...</p>
             </div>
-          ) : files.length === 0 ? (
+          ) : analyses.length === 0 ? (
             <div className="text-center p-6 text-muted-foreground">
               <ShieldAlert className="mx-auto mb-3 opacity-20" size={28} />
-              <p className="text-sm">No statements.</p>
+              <p className="text-sm">No reports yet.</p>
               <p className="text-xs mt-1">Upload an M-Pesa PDF.</p>
             </div>
-          ) : files.map(f => (
-            <div key={f.id} data-testid={`file-${f.id}`} onClick={() => setSelectedFileId(f.id)}
-              className={`group flex items-center p-2.5 rounded-lg cursor-pointer transition-all ${selectedFileId === f.id ? 'bg-primary/15 border border-primary/30' : 'hover:bg-accent border border-transparent'}`}>
-              <div className="mr-2.5 text-muted-foreground">
-                {f.isEncrypted ? <Lock size={13} className="text-amber-400" /> : <FileText size={13} />}
+          ) : analyses.map(a => {
+            const score = a.result.trustScore.score;
+            const grade = a.result.trustScore.grade;
+            const color = scoreColor(score);
+            return (
+              <div key={a.id} data-testid={`analysis-${a.id}`}
+                onClick={() => { setSelectedId(a.id); setPendingPdf(null); setAnalysisError(null); }}
+                className={`group flex items-center p-2.5 rounded-lg cursor-pointer transition-all ${selectedId === a.id ? 'bg-primary/15 border border-primary/30' : 'hover:bg-accent border border-transparent'}`}>
+                <div className="mr-2.5 shrink-0 flex flex-col items-center justify-center w-8 h-8 rounded-full" style={{ background: color + '22', border: `1.5px solid ${color}55` }}>
+                  <span className="text-[10px] font-black leading-none" style={{ color }}>{grade}</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-medium truncate">{a.name}</div>
+                  <div className="text-[10px] text-muted-foreground">{formatDate(a.dateAdded)}</div>
+                </div>
+                <Button variant="ghost" size="icon" data-testid={`remove-${a.id}`}
+                  className="opacity-0 group-hover:opacity-100 h-6 w-6 text-muted-foreground hover:text-destructive"
+                  onClick={async e => {
+                    e.stopPropagation();
+                    await fsDeleteAnalysis(a.id);
+                    setAnalyses(prev => prev.filter(x => x.id !== a.id));
+                    if (selectedId === a.id) setSelectedId(null);
+                  }}>
+                  <Trash2 size={11} />
+                </Button>
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-medium truncate">{f.name}</div>
-                <div className="text-[10px] text-muted-foreground">{formatSize(f.size)}</div>
-              </div>
-              <Button variant="ghost" size="icon" data-testid={`remove-${f.id}`}
-                className="opacity-0 group-hover:opacity-100 h-6 w-6 text-muted-foreground hover:text-destructive"
-                onClick={async e => { e.stopPropagation(); await fsDeleteFile(f.id); setFiles(prev => prev.filter(x => x.id !== f.id)); if (selectedFileId === f.id) setSelectedFileId(null); }}>
-                <Trash2 size={11} />
-              </Button>
-            </div>
-          ))}
+            );
+          })}
         </div>
+
         <div className="p-3 border-t border-border">
           <Button className="w-full text-xs" variant="outline" onClick={openPicker} size="sm" data-testid="add-btn">
-            Add Statement
+            Analyze Statement
           </Button>
         </div>
       </div>
@@ -411,34 +420,15 @@ export default function Vault() {
       {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
 
-        {!selectedFileId ? (
-          <div className="flex-1 flex items-center justify-center p-8"
-            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={e => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files?.[0]) handleFileAdd(e.dataTransfer.files[0]); }}>
-            <div data-testid="drop-zone"
-              className={`max-w-lg w-full border-2 border-dashed rounded-2xl p-16 text-center transition-all ${dragOver ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}>
-              <UploadCloud className="mx-auto text-muted-foreground mb-5" size={48} />
-              <h2 className="text-2xl font-bold mb-2">Upload M-Pesa Statement</h2>
-              <p className="text-sm text-muted-foreground mb-1">AI will analyze your transactions and generate</p>
-              <p className="text-sm font-semibold text-primary mb-8">a detailed creditworthiness report</p>
-              <div className="flex items-center justify-center gap-3 mb-6 text-xs text-muted-foreground">
-                <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-green-500" /> Password-protected PDFs</span>
-                <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-green-500" /> Secure & private</span>
-              </div>
-              <Button onClick={openPicker} size="lg" data-testid="browse-btn">Browse Files</Button>
-              <p className="text-xs text-muted-foreground mt-4">Or press Ctrl+V to paste</p>
-            </div>
-          </div>
-
-        ) : passwordRequired ? (
+        {passwordRequired && pendingPdf ? (
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="max-w-sm w-full bg-card border border-border rounded-2xl p-8 shadow-xl">
               <div className="flex justify-center mb-5 text-amber-400"><Lock size={44} /></div>
               <h2 className="text-xl font-semibold text-center mb-1">Statement is encrypted</h2>
-              <p className="text-sm text-muted-foreground text-center mb-6">Enter the password to unlock "{selectedFile?.name}"</p>
+              <p className="text-sm text-muted-foreground text-center mb-6">Enter the password to unlock "{pendingPdf.name}"</p>
               <form onSubmit={submitPassword} className="space-y-4">
-                <Input type="password" placeholder="Enter password..." value={passwordInput} onChange={e => setPasswordInput(e.target.value)} autoFocus data-testid="pwd-input" className="bg-background" />
+                <Input type="password" placeholder="Enter password..." value={passwordInput}
+                  onChange={e => setPasswordInput(e.target.value)} autoFocus data-testid="pwd-input" className="bg-background" />
                 {passwordError && <p className="text-destructive text-sm flex items-center gap-1"><AlertCircle size={13} />{passwordError}</p>}
                 <Button type="submit" className="w-full" data-testid="unlock-btn">Unlock & Analyze</Button>
               </form>
@@ -460,7 +450,27 @@ export default function Vault() {
               <AlertCircle className="mx-auto mb-4 text-destructive" size={48} />
               <h2 className="text-xl font-semibold mb-2">Analysis Failed</h2>
               <p className="text-muted-foreground text-sm mb-6">{analysisError}</p>
-              <Button onClick={() => selectedFileId && loadAndAnalyze(selectedFileId)} variant="outline">Try Again</Button>
+              <Button onClick={openPicker} variant="outline">Try Another File</Button>
+            </div>
+          </div>
+
+        ) : !selectedId ? (
+          <div className="flex-1 flex items-center justify-center p-8"
+            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={e => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files?.[0]) handleFileAdd(e.dataTransfer.files[0]); }}>
+            <div data-testid="drop-zone"
+              className={`max-w-lg w-full border-2 border-dashed rounded-2xl p-16 text-center transition-all ${dragOver ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}>
+              <UploadCloud className="mx-auto text-muted-foreground mb-5" size={48} />
+              <h2 className="text-2xl font-bold mb-2">Upload M-Pesa Statement</h2>
+              <p className="text-sm text-muted-foreground mb-1">AI will analyze your transactions and generate</p>
+              <p className="text-sm font-semibold text-primary mb-8">a detailed creditworthiness report</p>
+              <div className="flex items-center justify-center gap-3 mb-6 text-xs text-muted-foreground">
+                <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-green-500" /> Password-protected PDFs</span>
+                <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-green-500" /> PDF never stored — only the report</span>
+              </div>
+              <Button onClick={openPicker} size="lg" data-testid="browse-btn">Browse Files</Button>
+              <p className="text-xs text-muted-foreground mt-4">Or drag & drop · Ctrl+V to paste</p>
             </div>
           </div>
 
@@ -470,10 +480,12 @@ export default function Vault() {
             {/* Header */}
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-bold">{selectedFile?.name}</h2>
-                <p className="text-xs text-muted-foreground mt-0.5">{sm.periodStart} — {sm.periodEnd} · {sm.totalTransactions} total transactions</p>
+                <h2 className="text-lg font-bold">{selectedAnalysis?.name}</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {sm.periodStart} — {sm.periodEnd} · {sm.totalTransactions} total transactions
+                </p>
               </div>
-              <Button variant="outline" size="sm" onClick={() => selectedFileId && loadAndAnalyze(selectedFileId)}>Re-analyze</Button>
+              <Button variant="outline" size="sm" onClick={openPicker}>Analyze New</Button>
             </div>
 
             {/* Credit score hero + recommendation */}
@@ -501,7 +513,6 @@ export default function Vault() {
 
             {/* Summary stats */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-              {/* Cash Flow Ratio — primary signal, highlighted */}
               <div className="col-span-2 sm:col-span-1 bg-card border-2 rounded-xl p-4"
                 style={{ borderColor: (sm.cashFlowRatio >= 1.5 ? '#22c55e' : sm.cashFlowRatio >= 1.0 ? '#f59e0b' : '#ef4444') + '60' }}>
                 <div className="flex items-center gap-1.5 mb-1">
