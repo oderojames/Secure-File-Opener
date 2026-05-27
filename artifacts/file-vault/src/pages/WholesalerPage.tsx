@@ -10,6 +10,7 @@ import { db } from '@/lib/firebase';
 
 interface ReportSummary {
   id: string;
+  customerName?: string | null;
   retailerName: string;
   retailerEmail: string;
   fileName: string;
@@ -54,10 +55,14 @@ function RetailersManagedTab() {
 
   useEffect(() => { fetchReports(); }, []);
 
-  const filtered = reports.filter(r =>
-    r.retailerName?.toLowerCase().includes(search.toLowerCase()) ||
-    r.retailerEmail?.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = reports.filter(r => {
+    const q = search.toLowerCase();
+    return (
+      r.customerName?.toLowerCase().includes(q) ||
+      r.retailerName?.toLowerCase().includes(q) ||
+      r.retailerEmail?.toLowerCase().includes(q)
+    );
+  });
 
   if (loading) {
     return (
@@ -135,14 +140,14 @@ function RetailersManagedTab() {
                   key={r.id + i}
                   className="grid grid-cols-[1fr_160px_100px] items-center px-5 py-4 border-b border-border last:border-0 hover:bg-muted/20 transition-colors"
                 >
-                  {/* Retailer name */}
+                  {/* Customer / retailer name */}
                   <div className="min-w-0 pr-4">
                     <p className="font-semibold text-sm text-foreground truncate">
-                      {r.retailerName || '—'}
+                      {r.customerName || r.retailerName || '—'}
                     </p>
-                    {r.retailerEmail && (
-                      <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{r.retailerEmail}</p>
-                    )}
+                    <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
+                      {r.retailerEmail || ''}
+                    </p>
                   </div>
 
                   {/* Credit score */}

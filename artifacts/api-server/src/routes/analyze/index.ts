@@ -576,28 +576,50 @@ function monthLabel(ym: string) {
 
 // ─── Customer name extraction ─────────────────────────────────────────────────
 
-/** Scan the first ~40 lines of the statement for the account holder's name.
- *  M-Pesa statements typically place it near the top in patterns like:
- *    "Customer Name: JOHN DOE"  /  "Full Statement For: JOHN DOE"  /
- *    "Account Name: JOHN DOE"   /  "Statement for JOHN DOE WANJIRU"
- *  Falls back to the first ALL-CAPS multi-word token block found. */
+/** Scan the first ~50 lines of the statement for the account holder's name.
+ *  Handles common Safaricom M-Pesa statement layouts. */
 function extractCustomerName(text: string): string | null {
-  const top = text.split("\n").slice(0, 40).join("\n");
+  const topLines = text.split("\n").slice(0, 50);
+  const top = topLines.join("\n");
 
-  // Pattern 1: explicit label before the name
-  const labeled = top.match(
-    /(?:customer\s*name|account\s*name|full\s*statement\s*for|statement\s*for|prepared\s*for|name)\s*[:\-]?\s*([A-Z][A-Za-z''\-]{1,}\s+[A-Z][A-Za-z'\-\s]{1,})/i
-  );
-  if (labeled) return labeled[1].trim().replace(/\s+/g, " ");
+  // Words that appear in statement headers but are NOT customer names
+  const HEADER_WORDS = new Set([
+    "MPESA","M-PESA","SAFARICOM","STATEMENT","ACCOUNT","CUSTOMER",
+    "MOBILE","MONEY","PAGE","DATE","PERIOD","LIMITED","KENYA","FULL",
+    "MINI","RECEIPT","DETAILS","STATUS","BALANCE","WITHDRAWN","PAID",
+    "TRANSACTION","COMPLETION","TIME","NUMBER","NO","FOR","TO","FROM",
+  ]);
 
-  // Pattern 2: a run of 2-4 ALL-CAPS words (typical Kenyan name format)
-  const caps = top.match(/\b([A-Z]{2,}(?:\s+[A-Z]{2,}){1,3})\b/);
-  if (caps) {
-    const candidate = caps[1].trim();
-    // Reject generic header words
-    const SKIP = /^(MPESA|SAFARICOM|STATEMENT|ACCOUNT|CUSTOMER|MOBILE|MONEY|PAGE|DATE|PERIOD)$/i;
-    const words = candidate.split(/\s+/);
-    if (words.every(w => !SKIP.test(w))) return candidate;
+  const isPersonName = (s: string) => {
+    const words = s.trim().split(/\s+/);
+    if (words.length < 2 || words.length > 5) return false;
+    // Each word must be 2+ letters, not a header word
+    return words.every(w => w.length >= 2 && !HEADER_WORDS.has(w.toUpperCase()));
+  };
+
+  // Pattern 1: label immediately followed by the name on the SAME line
+  //   "Customer Name: JOHN DOE"  |  "Account Name JANE WANJIRU"
+  //   "Full Statement For: PETER KAMAU"  |  "Subscriber Name: ..."
+  const LABEL_RE = /(?:customer\s*name|account\s*(?:name|holder)|full\s*(?:name|statement\s*for)|statement\s*for|subscriber(?:\s*name)?|prepared\s*for|mobile\s*subscriber|name)\s*[:\-]?\s*(.{3,50})/gi;
+  let m: RegExpExecArray | null;
+  while ((m = LABEL_RE.exec(top)) !== null) {
+    const candidate = m[1].trim().replace(/\s+/g, " ").split(/[,|;]/)[0].trim();
+    if (isPersonName(candidate)) return candidate;
+  }
+
+  // Pattern 2: label on one line, name on the VERY NEXT line
+  for (let i = 0; i < topLines.length - 1; i++) {
+    if (/(?:customer\s*name|account\s*(?:name|holder)|subscriber|full\s*name)/i.test(topLines[i])) {
+      const next = topLines[i + 1].trim().replace(/\s+/g, " ");
+      if (isPersonName(next)) return next;
+    }
+  }
+
+  // Pattern 3: a standalone run of 2-4 ALL-CAPS words (common Kenyan name format)
+  const ALL_CAPS_RE = /\b([A-Z]{2,}(?:\s+[A-Z]{2,}){1,4})\b/g;
+  while ((m = ALL_CAPS_RE.exec(top)) !== null) {
+    const candidate = m[1].trim();
+    if (isPersonName(candidate)) return candidate;
   }
 
   return null;

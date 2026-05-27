@@ -69,6 +69,7 @@ interface StoredAnalysis {
   retailerUid?: string;
   retailerName?: string;
   retailerEmail?: string;
+  customerName?: string;
 }
 
 function fmt(n: number, currency = 'KES') {
@@ -220,6 +221,7 @@ async function fsSaveAnalysis(uid: string, analysis: StoredAnalysis): Promise<vo
   await setDoc(sharedReportDoc(analysis.id), {
     id: analysis.id,
     retailerUid: uid,
+    customerName: analysis.customerName ?? null,
     retailerName: analysis.retailerName ?? '',
     retailerEmail: analysis.retailerEmail ?? '',
     fileName: analysis.name,
@@ -392,7 +394,8 @@ export default function Vault() {
         dateAdded: new Date().toISOString(),
         result,
         retailerUid: uid,
-        retailerName: result.customerName || user?.displayName || user?.email?.split('@')[0] || 'Retailer',
+        customerName: result.customerName || undefined,
+        retailerName: user?.displayName || user?.email?.split('@')[0] || 'Retailer',
         retailerEmail: user?.email || '',
       };
       await fsSaveAnalysis(uid, entry);
