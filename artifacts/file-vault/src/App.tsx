@@ -5,11 +5,13 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import Vault from "@/pages/Vault";
 import AuthPage from "@/pages/AuthPage";
+import HomePage from "@/pages/HomePage";
+import WholesalerPage from "@/pages/WholesalerPage";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
 
-function Router() {
+function RetailerPortal() {
   const { user, loading } = useAuth();
 
   if (loading) {
@@ -24,10 +26,15 @@ function Router() {
   }
 
   if (!user) return <AuthPage />;
+  return <Vault />;
+}
 
+function Router() {
   return (
     <Switch>
-      <Route path="/" component={Vault} />
+      <Route path="/" component={HomePage} />
+      <Route path="/retailer" component={RetailerPortal} />
+      <Route path="/wholesaler" component={WholesalerPage} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useLocation } from 'wouter';
 import { ShieldCheck, Mail, Lock, User, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,6 +19,7 @@ function GoogleIcon() {
 }
 
 export default function AuthPage() {
+  const [, navigate] = useLocation();
   const { signInWithEmail, signUpWithEmail, signInWithGoogle } = useAuth();
   const [tab, setTab] = useState<Tab>('signin');
   const [name, setName] = useState('');
@@ -82,8 +84,8 @@ export default function AuthPage() {
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary/20 border border-primary/30 mb-4">
             <ShieldCheck size={28} className="text-primary" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Credit Vault</h1>
-          <p className="text-sm text-muted-foreground mt-1">M-Pesa Creditworthiness Platform</p>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Doyang</h1>
+          <p className="text-sm text-muted-foreground mt-1">Retailer Portal · M-Pesa Creditworthiness</p>
         </div>
 
         {/* Card */}
@@ -178,9 +180,18 @@ export default function AuthPage() {
           )}
         </div>
 
-        <p className="text-center text-xs text-muted-foreground mt-6">
-          Credit Vault © {new Date().getFullYear()} · Retailer Portal
-        </p>
+        <div className="flex flex-col items-center gap-3 mt-6">
+          <button
+            onClick={() => navigate('/')}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+            Back to home
+          </button>
+          <p className="text-xs text-muted-foreground">Doyang © {new Date().getFullYear()} · Retailer Portal</p>
+        </div>
       </div>
     </div>
   );
