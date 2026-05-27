@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/contexts/AuthContext';
 import WholesalerAuthPage from '@/pages/WholesalerAuthPage';
-import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search } from 'lucide-react';
+import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { collection, getDocs, query, orderBy } from 'firebase/firestore';
@@ -37,6 +37,14 @@ function RetailersManagedTab() {
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
   const [search, setSearch]     = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const copyEmail = (id: string, email: string) => {
+    navigator.clipboard.writeText(email).then(() => {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    });
+  };
 
   const fetchReports = async () => {
     try {
@@ -145,9 +153,20 @@ function RetailersManagedTab() {
                     <p className="font-semibold text-sm text-foreground truncate">
                       {r.customerName || r.retailerName || '—'}
                     </p>
-                    <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
-                      {r.retailerEmail || ''}
-                    </p>
+                    {r.retailerEmail ? (
+                      <div className="flex items-center gap-1 mt-0.5 group">
+                        <p className="text-[11px] text-muted-foreground truncate">{r.retailerEmail}</p>
+                        <button
+                          onClick={() => copyEmail(r.id, r.retailerEmail)}
+                          title="Copy email"
+                          className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                        >
+                          {copiedId === r.id
+                            ? <Check size={11} className="text-green-400" />
+                            : <Copy size={11} />}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
 
                   {/* Credit score */}
