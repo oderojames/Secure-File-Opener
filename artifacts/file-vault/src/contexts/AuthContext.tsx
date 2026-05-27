@@ -19,8 +19,8 @@ interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
   signInWithEmail: (email: string, password: string) => Promise<void>;
-  signUpWithEmail: (name: string, email: string, password: string) => Promise<void>;
-  signInWithGoogle: () => Promise<void>;
+  signUpWithEmail: (name: string, email: string, password: string, role?: 'retailer' | 'wholesaler') => Promise<void>;
+  signInWithGoogle: (role?: 'retailer' | 'wholesaler') => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -62,15 +62,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await signInWithEmailAndPassword(auth, email, password);
   };
 
-  const signUpWithEmail = async (name: string, email: string, password: string) => {
+  const signUpWithEmail = async (name: string, email: string, password: string, role: 'retailer' | 'wholesaler' = 'retailer') => {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     await updateProfile(cred.user, { displayName: name });
-    await ensureUserDoc(cred.user, 'retailer');
+    await ensureUserDoc(cred.user, role);
   };
 
-  const signInWithGoogle = async () => {
+  const signInWithGoogle = async (role: 'retailer' | 'wholesaler' = 'retailer') => {
     const cred = await signInWithPopup(auth, googleProvider);
-    await ensureUserDoc(cred.user, 'retailer');
+    await ensureUserDoc(cred.user, role);
   };
 
   const signOut = async () => {
