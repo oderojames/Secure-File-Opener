@@ -112,39 +112,60 @@ function categorize(desc: string, type: "credit" | "debit"): { category: string;
 
 // ─── M-Pesa statement parser ──────────────────────────────────────────────────
 
-const RECEIPT_RE = /\b[A-Z]{2,4}[A-Z0-9]{6,10}\b/;
+// Safaricom M-Pesa receipt numbers: 2-4 uppercase letters + 6-10 alphanumeric chars
+const RECEIPT_RE = /\b([A-Z]{2,4}[A-Z0-9]{6,10})\b/;
 
+/**
+ * Parse a M-Pesa statement text (tab-separated rows from position-aware pdfjs extraction,
+ * or fallback space-joined text).
+ *
+ * M-Pesa statement columns (tab-separated per visual row):
+ *   [0] Receipt No  [1] Completion Time  [2..n-3] Details  [n-2] Paid In or Withdrawn  [n-1] Balance
+ *
+ * Strategy:
+ * 1. Normalise tabs → spaces so all processing works on plain strings.
+ * 2. Anchor on receipt numbers to collect one transaction per segment.
+ * 3. Within each segment: extract date, classify credit/debit by keywords,
+ *    then pick the second-to-last amount (last = running balance).
+ * 4. Fallback: keyword + date line scan if no receipt numbers found.
+ */
 function parseTransactions(rawText: string): RawTransaction[] {
   const results: RawTransaction[] = [];
 
-  const text = rawText.replace(/\r\n|\r/g, "\n");
+  // Normalise: CR, then convert tabs → single space so downstream regexes work uniformly.
+  const text = rawText
+    .replace(/\r\n|\r/g, "\n")
+    .replace(/\t/g, " ");          // TAB → space; amounts/dates stay findable
+
   const lines = text
     .split("\n")
-    .map(l => l.trim())
+    .map(l => l.replace(/\s{2,}/g, " ").trim())
     .filter(l => l.length > 5);
 
-  // ── Strategy 1: Receipt-number anchored (most M-Pesa PDFs) ────────────────
-  // Group lines that belong to the same transaction block, anchored by receipt number
+  // ── Strategy 1: Receipt-number anchored ───────────────────────────────────
+  // With position-aware PDF extraction each visual row → one line.
+  // A receipt number marks the start of a transaction row.
   const segments: string[] = [];
   let buffer = "";
 
   for (const line of lines) {
-    if (SKIP_RE.test(line)) continue;
+    if (SKIP_RE.test(line) && !RECEIPT_RE.test(line)) continue;
+
     if (RECEIPT_RE.test(line)) {
       if (buffer) segments.push(buffer.trim());
       buffer = line;
     } else if (buffer) {
-      // Add up to 3 continuation lines (for multi-line descriptions)
-      const bufferLines = buffer.split(" | ").length;
-      if (bufferLines <= 4) buffer += " " + line;
+      // Accumulate up to 3 continuation lines for multi-line descriptions
+      const lines_in_buf = buffer.split("|").length;
+      if (lines_in_buf <= 3) buffer += " " + line;
     } else if (CREDIT_RE.test(line) || DEBIT_RE.test(line)) {
-      // No receipt yet but has a keyword — start a keyword-anchored block
       buffer = line;
     }
   }
   if (buffer) segments.push(buffer.trim());
 
   for (const seg of segments) {
+    // Skip failed / reversed transactions
     if (FAILED_RE.test(seg)) continue;
 
     const type = classify(seg);
@@ -156,9 +177,12 @@ function parseTransactions(rawText: string): RawTransaction[] {
     const amounts = extractAmounts(seg);
     if (!amounts.length) continue;
 
-    // Transaction amount = second-to-last amount (last is the running balance)
-    // If only one amount present, use it directly
-    const amount = amounts.length >= 2 ? amounts[amounts.length - 2] : amounts[0];
+    // In a M-Pesa statement row the running BALANCE is always the LAST amount.
+    // The TRANSACTION AMOUNT is the second-to-last (or only) amount.
+    // Exclude 0.00 amounts which are sometimes printed as placeholder dashes.
+    const nonZero = amounts.filter(a => a > 0);
+    if (!nonZero.length) continue;
+    const amount = nonZero.length >= 2 ? nonZero[nonZero.length - 2] : nonZero[0];
     if (!amount || amount <= 0) continue;
 
     const desc = cleanDescription(seg);
@@ -168,7 +192,7 @@ function parseTransactions(rawText: string): RawTransaction[] {
     results.push({ date, amount, type, description: desc, category, isFee });
   }
 
-  // ── Strategy 2: Keyword line-by-line fallback ─────────────────────────────
+  // ── Strategy 2: Keyword line-by-line fallback (no receipt numbers) ────────
   if (results.length === 0) {
     for (const line of lines) {
       if (SKIP_RE.test(line) || line.length < 15) continue;
@@ -183,7 +207,9 @@ function parseTransactions(rawText: string): RawTransaction[] {
       const amounts = extractAmounts(line);
       if (!amounts.length) continue;
 
-      const amount = amounts.length >= 2 ? amounts[amounts.length - 2] : amounts[0];
+      const nonZero = amounts.filter(a => a > 0);
+      if (!nonZero.length) continue;
+      const amount = nonZero.length >= 2 ? nonZero[nonZero.length - 2] : nonZero[0];
       if (!amount || amount <= 0) continue;
 
       const desc = cleanDescription(line);

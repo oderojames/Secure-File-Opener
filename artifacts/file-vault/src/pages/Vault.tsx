@@ -280,13 +280,40 @@ export default function Vault() {
     };
     const pdfDoc = await task.promise;
     setPasswordRequired(false); setPasswordError(null);
-    let text = '';
+
+    let fullText = '';
+
     for (let i = 1; i <= pdfDoc.numPages; i++) {
       const page = await pdfDoc.getPage(i);
       const content = await page.getTextContent();
-      text += content.items.map((x: any) => x.str).join(' ') + '\n';
+
+      // Group text items by Y position to reconstruct table rows.
+      // Each pdfjs item has a transform: [scaleX, skewX, skewY, scaleY, x, y]
+      // We round Y to the nearest 3 units to group items on the same visual line.
+      const rowMap = new Map<number, Array<{ x: number; str: string }>>();
+
+      for (const item of content.items as any[]) {
+        const str: string = item.str ?? '';
+        if (!str.trim()) continue;
+        const y = Math.round(item.transform[5] / 3) * 3;
+        if (!rowMap.has(y)) rowMap.set(y, []);
+        rowMap.get(y)!.push({ x: item.transform[4], str: str.trim() });
+      }
+
+      // Sort rows top-to-bottom (PDF Y axis is bottom-up, so descending Y = top of page)
+      const sortedY = [...rowMap.keys()].sort((a, b) => b - a);
+
+      for (const y of sortedY) {
+        // Sort items left-to-right within each row
+        const items = rowMap.get(y)!.sort((a, b) => a.x - b.x);
+        // Use TAB between columns so the backend can split by column index
+        fullText += items.map(it => it.str).join('\t') + '\n';
+      }
+
+      fullText += '\n'; // page separator
     }
-    return text;
+
+    return fullText;
   };
 
   const analyzeAndSave = async (pdfData: string, fileName: string, fileSize: number, password?: string) => {
