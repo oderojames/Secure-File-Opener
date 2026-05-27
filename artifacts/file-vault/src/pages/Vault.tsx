@@ -283,31 +283,88 @@ export default function Vault() {
 
     let fullText = '';
 
+    // Column X-positions detected from the header row (persist across pages)
+    let paidInX   = -1;
+    let withdrawnX = -1;
+    let balanceX  = -1;
+    const COL_TOLERANCE = 60; // PDF units — how close an amount must be to its column header
+
+    // Helper: is a string a bare monetary amount (e.g. "1,234.56")?
+    const isMoney = (s: string) => /^\d{1,3}(,\d{3})*\.\d{2}$/.test(s);
+
     for (let i = 1; i <= pdfDoc.numPages; i++) {
       const page = await pdfDoc.getPage(i);
       const content = await page.getTextContent();
 
-      // Group text items by Y position to reconstruct table rows.
-      // Each pdfjs item has a transform: [scaleX, skewX, skewY, scaleY, x, y]
-      // We round Y to the nearest 3 units to group items on the same visual line.
+      // ── Group items by Y position (round to nearest 4 units to handle slight offsets)
       const rowMap = new Map<number, Array<{ x: number; str: string }>>();
-
       for (const item of content.items as any[]) {
-        const str: string = item.str ?? '';
-        if (!str.trim()) continue;
-        const y = Math.round(item.transform[5] / 3) * 3;
+        const str: string = (item.str ?? '').trim();
+        if (!str) continue;
+        const y = Math.round(item.transform[5] / 4) * 4;
         if (!rowMap.has(y)) rowMap.set(y, []);
-        rowMap.get(y)!.push({ x: item.transform[4], str: str.trim() });
+        rowMap.get(y)!.push({ x: item.transform[4], str });
       }
 
-      // Sort rows top-to-bottom (PDF Y axis is bottom-up, so descending Y = top of page)
+      // Sort rows top-to-bottom (PDF Y increases bottom-up, so descending = top first)
       const sortedY = [...rowMap.keys()].sort((a, b) => b - a);
 
       for (const y of sortedY) {
-        // Sort items left-to-right within each row
         const items = rowMap.get(y)!.sort((a, b) => a.x - b.x);
-        // Use TAB between columns so the backend can split by column index
-        fullText += items.map(it => it.str).join('\t') + '\n';
+        const rowText = items.map(it => it.str).join(' ');
+
+        // ── Detect the M-Pesa table header to capture column X positions ──────
+        if (/paid.?in/i.test(rowText) && /withdrawn/i.test(rowText)) {
+          for (const it of items) {
+            if (/paid.?in/i.test(it.str))  paidInX    = it.x;
+            if (/withdrawn/i.test(it.str)) withdrawnX = it.x;
+            if (/balance/i.test(it.str))   balanceX   = it.x;
+          }
+          // Emit the header as a skip marker so the backend ignores it
+          fullText += '##HEADER##\n';
+          continue;
+        }
+
+        // ── If column positions are known, tag amounts by column ──────────────
+        if (paidInX >= 0 && withdrawnX >= 0) {
+          const textParts: string[] = [];
+          let paidIn   = 0;
+          let withdrawn = 0;
+          let balance  = 0;
+
+          for (const it of items) {
+            if (isMoney(it.str)) {
+              const val = parseFloat(it.str.replace(/,/g, ''));
+              const dPaid = Math.abs(it.x - paidInX);
+              const dWith = Math.abs(it.x - withdrawnX);
+              const dBal  = balanceX >= 0 ? Math.abs(it.x - balanceX) : Infinity;
+              const minD  = Math.min(dPaid, dWith, dBal);
+
+              if (minD > COL_TOLERANCE) {
+                // Amount far from all known columns → treat as description context
+                textParts.push(it.str);
+              } else if (minD === dBal) {
+                balance = val;
+              } else if (minD === dWith) {
+                withdrawn = val;
+              } else {
+                paidIn = val;
+              }
+            } else {
+              textParts.push(it.str);
+            }
+          }
+
+          // Emit tagged row — backend reads |PAIDIN=|WITHDRAWN=|BALANCE= directly
+          let row = textParts.join(' ');
+          if (paidIn   > 0) row += ` |PAIDIN=${paidIn}`;
+          if (withdrawn > 0) row += ` |WITHDRAWN=${withdrawn}`;
+          if (balance   > 0) row += ` |BALANCE=${balance}`;
+          fullText += row + '\n';
+        } else {
+          // No header detected yet — emit plain row (pre-header content / other PDFs)
+          fullText += items.map(it => it.str).join(' ') + '\n';
+        }
       }
 
       fullText += '\n'; // page separator

@@ -56,9 +56,25 @@ function extractDate(text: string): string | null {
 const AMOUNT_RE = /\b(\d{1,3}(?:,\d{3})*\.\d{2})\b/g;
 
 function extractAmounts(text: string): number[] {
-  return [...text.matchAll(AMOUNT_RE)]
+  // Strip tagged markers before scanning so they don't double-count
+  const clean = text.replace(/\|PAIDIN=[\d.]+/g, "").replace(/\|WITHDRAWN=[\d.]+/g, "").replace(/\|BALANCE=[\d.]+/g, "");
+  return [...clean.matchAll(AMOUNT_RE)]
     .map(m => parseFloat(m[1].replace(/,/g, "")))
     .filter(a => a > 0 && a < 50_000_000);
+}
+
+/** Extract column-tagged amounts from frontend-tagged rows.
+ *  Returns null if the row wasn't tagged (fallback path applies). */
+function extractTaggedAmounts(text: string): { paidIn: number; withdrawn: number; balance: number } | null {
+  const paidInM    = text.match(/\|PAIDIN=([\d.]+)/);
+  const withdrawnM = text.match(/\|WITHDRAWN=([\d.]+)/);
+  const balanceM   = text.match(/\|BALANCE=([\d.]+)/);
+  if (!paidInM && !withdrawnM) return null;        // untagged row
+  return {
+    paidIn:    paidInM    ? parseFloat(paidInM[1])    : 0,
+    withdrawn: withdrawnM ? parseFloat(withdrawnM[1]) : 0,
+    balance:   balanceM   ? parseFloat(balanceM[1])   : 0,
+  };
 }
 
 // ─── Transaction classification ───────────────────────────────────────────────
@@ -143,21 +159,23 @@ function parseTransactions(rawText: string): RawTransaction[] {
     .filter(l => l.length > 5);
 
   // ── Strategy 1: Receipt-number anchored ───────────────────────────────────
-  // With position-aware PDF extraction each visual row → one line.
-  // A receipt number marks the start of a transaction row.
+  // The frontend emits one tagged row per transaction:
+  //   "OAX... date desc |PAIDIN=1000 |BALANCE=5000"   (credit)
+  //   "OBX... date desc |WITHDRAWN=500 |BALANCE=4500"  (debit)
+  // A receipt number marks the start of a transaction segment.
   const segments: string[] = [];
   let buffer = "";
 
   for (const line of lines) {
+    // Skip explicit header markers and table headers
+    if (line === "##HEADER##") continue;
     if (SKIP_RE.test(line) && !RECEIPT_RE.test(line)) continue;
 
     if (RECEIPT_RE.test(line)) {
       if (buffer) segments.push(buffer.trim());
       buffer = line;
     } else if (buffer) {
-      // Accumulate up to 3 continuation lines for multi-line descriptions
-      const lines_in_buf = buffer.split("|").length;
-      if (lines_in_buf <= 3) buffer += " " + line;
+      buffer += " " + line;
     } else if (CREDIT_RE.test(line) || DEBIT_RE.test(line)) {
       buffer = line;
     }
@@ -165,21 +183,50 @@ function parseTransactions(rawText: string): RawTransaction[] {
   if (buffer) segments.push(buffer.trim());
 
   for (const seg of segments) {
-    // Skip failed / reversed transactions
     if (FAILED_RE.test(seg)) continue;
-
-    const type = classify(seg);
-    if (!type) continue;
 
     const date = extractDate(seg);
     if (!date) continue;
 
+    // ── Path A: column-tagged row (accurate) ─────────────────────────────
+    const tagged = extractTaggedAmounts(seg);
+    if (tagged) {
+      let amount = 0;
+      let type: "credit" | "debit";
+
+      if (tagged.paidIn > 0 && tagged.withdrawn > 0) {
+        // Both columns filled → use keyword to decide (shouldn't happen in normal statements)
+        const kw = classify(seg);
+        type   = kw ?? "debit";
+        amount = type === "credit" ? tagged.paidIn : tagged.withdrawn;
+      } else if (tagged.paidIn > 0) {
+        type   = "credit";
+        amount = tagged.paidIn;
+      } else if (tagged.withdrawn > 0) {
+        type   = "debit";
+        amount = tagged.withdrawn;
+      } else {
+        continue; // Neither column has a value — balance-only row or header
+      }
+
+      if (!amount || amount <= 0) continue;
+
+      const desc = cleanDescription(seg);
+      if (!desc || desc.length < 4) continue;
+
+      const { category, isFee } = categorize(desc, type);
+      results.push({ date, amount, type, description: desc, category, isFee });
+      continue;
+    }
+
+    // ── Path B: untagged row — keyword + positional heuristic (fallback) ─
+    const type = classify(seg);
+    if (!type) continue;
+
     const amounts = extractAmounts(seg);
     if (!amounts.length) continue;
 
-    // In a M-Pesa statement row the running BALANCE is always the LAST amount.
-    // The TRANSACTION AMOUNT is the second-to-last (or only) amount.
-    // Exclude 0.00 amounts which are sometimes printed as placeholder dashes.
+    // Last amount = running balance; second-to-last = transaction amount
     const nonZero = amounts.filter(a => a > 0);
     if (!nonZero.length) continue;
     const amount = nonZero.length >= 2 ? nonZero[nonZero.length - 2] : nonZero[0];
@@ -192,11 +239,28 @@ function parseTransactions(rawText: string): RawTransaction[] {
     results.push({ date, amount, type, description: desc, category, isFee });
   }
 
-  // ── Strategy 2: Keyword line-by-line fallback (no receipt numbers) ────────
+  // ── Strategy 2: Keyword line-by-line fallback (no receipt numbers found) ─
   if (results.length === 0) {
     for (const line of lines) {
+      if (line === "##HEADER##") continue;
       if (SKIP_RE.test(line) || line.length < 15) continue;
       if (FAILED_RE.test(line)) continue;
+
+      // Try tagged path first
+      const tagged = extractTaggedAmounts(line);
+      if (tagged && extractDate(line)) {
+        const type: "credit" | "debit" = tagged.paidIn > 0 ? "credit" : "debit";
+        const amount = tagged.paidIn > 0 ? tagged.paidIn : tagged.withdrawn;
+        if (amount > 0) {
+          const date = extractDate(line)!;
+          const desc = cleanDescription(line);
+          if (desc && desc.length >= 4) {
+            const { category, isFee } = categorize(desc, type);
+            results.push({ date, amount, type, description: desc, category, isFee });
+            continue;
+          }
+        }
+      }
 
       const type = classify(line);
       if (!type) continue;
