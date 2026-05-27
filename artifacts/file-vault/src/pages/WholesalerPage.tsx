@@ -11,6 +11,7 @@ import { db } from '@/lib/firebase';
 interface ReportSummary {
   id: string;
   customerName?: string | null;
+  customerPhone?: string | null;
   retailerName: string;
   retailerEmail: string;
   fileName: string;
@@ -149,12 +150,32 @@ function RetailersManagedTab() {
                   className="grid grid-cols-[1fr_160px_100px] items-center px-5 py-4 border-b border-border last:border-0 hover:bg-muted/20 transition-colors"
                 >
                   {/* Customer / retailer name */}
-                  <div className="min-w-0 pr-4">
+                  <div className="min-w-0 pr-4 space-y-0.5">
+                    {/* M-Pesa account holder name (from statement) */}
                     <p className="font-semibold text-sm text-foreground truncate">
                       {r.customerName || r.retailerName || '—'}
                     </p>
+
+                    {/* Business / registered name (from account signup) */}
+                    {r.customerName && r.retailerName && (
+                      <p className="text-[11px] text-muted-foreground truncate">
+                        <span className="text-muted-foreground/60">Business:</span> {r.retailerName}
+                      </p>
+                    )}
+
+                    {/* Phone contact extracted from M-Pesa statement */}
+                    {r.customerPhone && (
+                      <p className="text-[11px] text-amber-400/80 truncate">
+                        <span className="text-muted-foreground/60">
+                          {r.customerName ? 'Contact Owner:' : 'Contact Business:'}
+                        </span>{' '}
+                        {r.customerPhone}
+                      </p>
+                    )}
+
+                    {/* Email with copy button */}
                     {r.retailerEmail ? (
-                      <div className="flex items-center gap-1 mt-0.5 group">
+                      <div className="flex items-center gap-1 group">
                         <p className="text-[11px] text-muted-foreground truncate">{r.retailerEmail}</p>
                         <button
                           onClick={() => copyEmail(r.id, r.retailerEmail)}

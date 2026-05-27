@@ -625,6 +625,34 @@ function extractCustomerName(text: string): string | null {
   return null;
 }
 
+// ─── Customer phone extraction ────────────────────────────────────────────────
+
+/** Normalise a raw phone string to +254XXXXXXXXX format where possible. */
+function formatPhone(raw: string): string {
+  const digits = raw.replace(/\D/g, "");
+  if (digits.startsWith("254") && digits.length === 12) return `+${digits}`;
+  if (digits.startsWith("0") && digits.length === 10) return `+254${digits.slice(1)}`;
+  return raw.trim();
+}
+
+/** Scan the first ~50 lines for the account holder's phone number.
+ *  Handles patterns like "Mobile No: 0722123456", "+254722123456", etc. */
+function extractCustomerPhone(text: string): string | null {
+  const top = text.split("\n").slice(0, 50).join("\n");
+
+  // Pattern 1: explicit label
+  const labeled = top.match(
+    /(?:mobile\s*(?:no\.?|number)?|phone(?:\s*no\.?)?|tel(?:ephone)?|contact(?:\s*no\.?)?)\s*[:\-]?\s*(\+?(?:254|0)\d{8,9})/i
+  );
+  if (labeled) return formatPhone(labeled[1]);
+
+  // Pattern 2: any Kenyan mobile number in the header block
+  const bare = top.match(/\b(\+?254\s*[17]\d{8}|0[17]\d{8})\b/);
+  if (bare) return formatPhone(bare[1].replace(/\s/g, ""));
+
+  return null;
+}
+
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 router.post("/analyze/mpesa", async (req, res) => {
@@ -635,7 +663,8 @@ router.post("/analyze/mpesa", async (req, res) => {
   }
 
   try {
-    const customerName = extractCustomerName(text);
+    const customerName  = extractCustomerName(text);
+    const customerPhone = extractCustomerPhone(text);
 
     // Parse transactions using the regex engine (fast, no API call)
     let transactions = dedup(parseTransactions(text.trim()));
@@ -677,6 +706,7 @@ router.post("/analyze/mpesa", async (req, res) => {
 
     res.json({
       customerName,
+      customerPhone,
       dailyIncome,
       monthlyIncome,
       trustScore: {

@@ -54,6 +54,7 @@ interface RecentTransaction {
 
 interface AnalysisResult {
   customerName?: string | null;
+  customerPhone?: string | null;
   dailyIncome: DailyIncome[]; monthlyIncome: MonthlyIncome[];
   trustScore: TrustScore; summary: Summary;
   behavioralInsights?: BehavioralInsight[];
@@ -70,6 +71,7 @@ interface StoredAnalysis {
   retailerName?: string;
   retailerEmail?: string;
   customerName?: string;
+  customerPhone?: string;
 }
 
 function fmt(n: number, currency = 'KES') {
@@ -222,6 +224,7 @@ async function fsSaveAnalysis(uid: string, analysis: StoredAnalysis): Promise<vo
     id: analysis.id,
     retailerUid: uid,
     customerName: analysis.customerName ?? null,
+    customerPhone: analysis.customerPhone ?? null,
     retailerName: analysis.retailerName ?? '',
     retailerEmail: analysis.retailerEmail ?? '',
     fileName: analysis.name,
@@ -395,6 +398,7 @@ export default function Vault() {
         result,
         retailerUid: uid,
         customerName: result.customerName || undefined,
+        customerPhone: result.customerPhone || undefined,
         retailerName: user?.displayName || user?.email?.split('@')[0] || 'Retailer',
         retailerEmail: user?.email || '',
       };

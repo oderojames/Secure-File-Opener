@@ -89,7 +89,7 @@ export default function AuthPage() {
             {tab === 'signup' && (
               <div className="relative">
                 <User size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <Input placeholder="Full name" value={name} onChange={e => setName(e.target.value)}
+                <Input placeholder="Business name" value={name} onChange={e => setName(e.target.value)}
                   className="pl-9 bg-background" required />
               </div>
             )}
