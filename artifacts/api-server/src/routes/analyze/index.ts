@@ -1,17 +1,16 @@
 import { Router } from "express";
-import { openai } from "@workspace/integrations-openai-ai-server";
 
 const router = Router();
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface RawTransaction {
-  date: string;        // YYYY-MM-DD
-  amount: number;      // always positive
+  date: string;
+  amount: number;
   type: "credit" | "debit";
   description: string;
   category: string;
-  isFee?: boolean;     // true = M-Pesa transaction cost / charge (exclude from expenditure)
+  isFee?: boolean;
 }
 
 interface BehavioralInsight {
@@ -20,63 +19,200 @@ interface BehavioralInsight {
   description: string;
 }
 
-// ─── Extraction prompt ────────────────────────────────────────────────────────
+// ─── Date parsing ─────────────────────────────────────────────────────────────
 
-const EXTRACT_SYSTEM = `You are a precise Kenyan M-Pesa statement parser. Your only job is to extract EVERY COMPLETED transaction and return a raw JSON array.
+const MONTH_MAP: Record<string, string> = {
+  jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+  jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+};
 
-CRITICAL RULES:
-1. SKIP any line that contains "Failed", "Reversed" (as an entry type, not a credit reversal), "Cancelled", or "Declined".
-2. ONLY include transactions that are completed/successful.
-3. Transaction Cost / Charge lines: include them with isFee=true (they are separate entries, not part of the main transaction).
+function extractDate(text: string): string | null {
+  // DD/MM/YYYY or D/M/YY (most common in M-Pesa statements)
+  let m = text.match(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](20\d{2}|\d{2})\b/);
+  if (m) {
+    const year = m[3].length === 2 ? `20${m[3]}` : m[3];
+    return `${year}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  }
+  // YYYY-MM-DD
+  m = text.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  // DD MMM YYYY or DD-MMM-YYYY
+  m = text.match(/\b(\d{1,2})[\s\-](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*[\s\-,]+(20\d{2})\b/i);
+  if (m) {
+    const mo = MONTH_MAP[m[2].toLowerCase().slice(0, 3)] ?? "01";
+    return `${m[3]}-${mo}-${m[1].padStart(2, "0")}`;
+  }
+  // MMM DD YYYY
+  m = text.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{1,2})[,\s]+(20\d{2})\b/i);
+  if (m) {
+    const mo = MONTH_MAP[m[1].toLowerCase().slice(0, 3)] ?? "01";
+    return `${m[3]}-${mo}-${m[2].padStart(2, "0")}`;
+  }
+  return null;
+}
 
-CREDIT (type="credit") — line contains any of:
-  "received from" | "you received" | "cash received" | "paid to you" | "payment received"
-  "business payment received" | "reversal" | "deposited by agent" | "mpesa deposit" | "transfer received"
-  "deposited for" | "salary" | "credit" | "cash deposit"
+// ─── Amount extraction ────────────────────────────────────────────────────────
 
-DEBIT (type="debit") — line contains any of:
-  "withdrawal" | "send money" | "sent to" | "pay bill" | "paybill" | "buy goods" | "lipa na mpesa"
-  "airtime" | "transaction cost" | "charge" | "fuliza" | "loan repayment" | "kcb mpesa" | "okoa jahazi"
-  "till number" | "merchant payment" | "global pay" | "m-shwari" | "lock savings"
+const AMOUNT_RE = /\b(\d{1,3}(?:,\d{3})*\.\d{2})\b/g;
 
-If a line matches neither → skip it entirely.
+function extractAmounts(text: string): number[] {
+  return [...text.matchAll(AMOUNT_RE)]
+    .map(m => parseFloat(m[1].replace(/,/g, "")))
+    .filter(a => a > 0 && a < 50_000_000);
+}
 
-CATEGORY rules (apply first match):
-  "pay bill" | "paybill" | "buy goods" | "till number" | "lipa na mpesa" | "merchant" → "Bill Payment"
-  "airtime" → "Airtime"
-  "fuliza" | "loan" | "kcb mpesa" | "okoa jahazi" | "m-shwari" → "Loan"
-  "withdrawal" → "Withdrawal"
-  "send money" | "sent to" | "transfer" → "Transfer"
-  "transaction cost" | "charge" → "Other" (and set isFee=true)
-  credit + payer looks like a company/business → "Business"
-  credit → "Income"
-  everything else → "Other"
+// ─── Transaction classification ───────────────────────────────────────────────
 
-DATE: parse all formats (DD/MM/YYYY, DD/MM/YY, MMM DD YYYY, DD-MMM-YYYY, D/M/YYYY, etc.) to YYYY-MM-DD.
-AMOUNT: strip commas, ignore currency symbols. Always a positive number.
+const CREDIT_RE =
+  /received from|you received|cash received|paid to you|payment received|business payment received|reversal|deposited by agent|mpesa deposit|transfer received|deposited for\b|salary\b|cash deposit|airtime commission|business credit/i;
 
-OUTPUT: return ONLY a raw JSON array, no markdown, no extra text.
-[
-  { "date": "YYYY-MM-DD", "amount": 1234.56, "type": "credit", "description": "Received from Jane Doe via 0722000000", "category": "Income", "isFee": false },
-  { "date": "YYYY-MM-DD", "amount": 27.00,   "type": "debit",  "description": "Transaction cost", "category": "Other", "isFee": true }
-]
+const DEBIT_RE =
+  /withdrawal|send money|sent to|pay bill|paybill|buy goods|lipa na mpesa|airtime (?:for|purchase|\d{10})|transaction cost|charge for|fuliza|loan repayment|kcb mpesa|okoa jahazi|till number|merchant payment|global pay|m-shwari|lock savings|funds transfer/i;
 
-Return [] if no valid completed transactions found.`;
+const FEE_RE = /transaction cost|charge for/i;
 
-// ─── Insights prompt ──────────────────────────────────────────────────────────
+const FAILED_RE = /\b(failed|reversed|cancelled|declined)\b/i;
 
-const INSIGHTS_SYSTEM = `You are a senior Kenyan credit analyst with deep M-Pesa expertise. Given computed financial metrics and a transaction sample, write exactly 5 highly specific behavioral insights. Return ONLY a raw JSON array — no markdown, no preamble.
+const SKIP_RE =
+  /^(receipt no|completion time|details|transaction status|paid in|withdrawn|balance|transaction|m-pesa statement|safaricom|page \d|customer name|account no|phone|period:|opening balance|closing balance|statement period|dear |to whom)/i;
 
-Each object:
-{ "type": "positive"|"negative"|"warning", "title": "5–8 word headline", "description": "2 sentences citing specific KES figures or percentages from the data." }
+function classify(text: string): "credit" | "debit" | null {
+  if (CREDIT_RE.test(text)) return "credit";
+  if (DEBIT_RE.test(text)) return "debit";
+  return null;
+}
 
-Focus on: income regularity, savings vs spending ratio, debt/loan usage patterns, withdrawal behavior, bill payment consistency, income source diversity. Be precise and cite numbers.`;
+// ─── Description cleaning ─────────────────────────────────────────────────────
+
+function cleanDescription(text: string): string {
+  return text
+    .replace(/\b\d{1,2}[\/\-]\d{1,2}[\/\-](?:20)?\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?\b/g, "")
+    .replace(/\b20\d{2}-\d{2}-\d{2}(?:[\sT]\d{1,2}:\d{2}(?::\d{2})?)?\b/g, "")
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?\b/gi, "")
+    .replace(AMOUNT_RE, "")
+    .replace(/\b[A-Z]{2,4}[A-Z0-9]{6,10}\b/g, "") // receipt numbers
+    .replace(/\b(completed|failed|cancelled|declined|reversed)\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+// ─── Category mapping ─────────────────────────────────────────────────────────
+
+function categorize(desc: string, type: "credit" | "debit"): { category: string; isFee: boolean } {
+  const d = desc.toLowerCase();
+  if (FEE_RE.test(d)) return { category: "Other", isFee: true };
+  if (/pay bill|paybill|buy goods|till number|lipa na mpesa|merchant/.test(d)) return { category: "Bill Payment", isFee: false };
+  if (/\bairtime\b/.test(d)) return { category: "Airtime", isFee: false };
+  if (/fuliza|loan repayment|kcb mpesa|okoa jahazi|m-shwari/.test(d)) return { category: "Loan", isFee: false };
+  if (/withdrawal/.test(d)) return { category: "Withdrawal", isFee: false };
+  if (/send money|sent to|funds transfer/.test(d)) return { category: "Transfer", isFee: false };
+  if (type === "credit") return { category: "Income", isFee: false };
+  return { category: "Other", isFee: false };
+}
+
+// ─── M-Pesa statement parser ──────────────────────────────────────────────────
+
+const RECEIPT_RE = /\b[A-Z]{2,4}[A-Z0-9]{6,10}\b/;
+
+function parseTransactions(rawText: string): RawTransaction[] {
+  const results: RawTransaction[] = [];
+
+  const text = rawText.replace(/\r\n|\r/g, "\n");
+  const lines = text
+    .split("\n")
+    .map(l => l.trim())
+    .filter(l => l.length > 5);
+
+  // ── Strategy 1: Receipt-number anchored (most M-Pesa PDFs) ────────────────
+  // Group lines that belong to the same transaction block, anchored by receipt number
+  const segments: string[] = [];
+  let buffer = "";
+
+  for (const line of lines) {
+    if (SKIP_RE.test(line)) continue;
+    if (RECEIPT_RE.test(line)) {
+      if (buffer) segments.push(buffer.trim());
+      buffer = line;
+    } else if (buffer) {
+      // Add up to 3 continuation lines (for multi-line descriptions)
+      const bufferLines = buffer.split(" | ").length;
+      if (bufferLines <= 4) buffer += " " + line;
+    } else if (CREDIT_RE.test(line) || DEBIT_RE.test(line)) {
+      // No receipt yet but has a keyword — start a keyword-anchored block
+      buffer = line;
+    }
+  }
+  if (buffer) segments.push(buffer.trim());
+
+  for (const seg of segments) {
+    if (FAILED_RE.test(seg)) continue;
+
+    const type = classify(seg);
+    if (!type) continue;
+
+    const date = extractDate(seg);
+    if (!date) continue;
+
+    const amounts = extractAmounts(seg);
+    if (!amounts.length) continue;
+
+    // Transaction amount = second-to-last amount (last is the running balance)
+    // If only one amount present, use it directly
+    const amount = amounts.length >= 2 ? amounts[amounts.length - 2] : amounts[0];
+    if (!amount || amount <= 0) continue;
+
+    const desc = cleanDescription(seg);
+    if (!desc || desc.length < 4) continue;
+
+    const { category, isFee } = categorize(desc, type);
+    results.push({ date, amount, type, description: desc, category, isFee });
+  }
+
+  // ── Strategy 2: Keyword line-by-line fallback ─────────────────────────────
+  if (results.length === 0) {
+    for (const line of lines) {
+      if (SKIP_RE.test(line) || line.length < 15) continue;
+      if (FAILED_RE.test(line)) continue;
+
+      const type = classify(line);
+      if (!type) continue;
+
+      const date = extractDate(line);
+      if (!date) continue;
+
+      const amounts = extractAmounts(line);
+      if (!amounts.length) continue;
+
+      const amount = amounts.length >= 2 ? amounts[amounts.length - 2] : amounts[0];
+      if (!amount || amount <= 0) continue;
+
+      const desc = cleanDescription(line);
+      if (!desc || desc.length < 4) continue;
+
+      const { category, isFee } = categorize(desc, type);
+      results.push({ date, amount, type, description: desc, category, isFee });
+    }
+  }
+
+  return results;
+}
+
+// ─── Deduplicate ──────────────────────────────────────────────────────────────
+
+function dedup(txs: RawTransaction[]): RawTransaction[] {
+  const seen = new Set<string>();
+  return txs.filter(t => {
+    const key = `${t.date}|${t.amount}|${t.type}|${t.description.slice(0, 40)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 // ─── Scoring engine ───────────────────────────────────────────────────────────
 
 function computeScore(txs: RawTransaction[]) {
   const credits = txs.filter(t => t.type === "credit");
-  // Exclude transaction fees from expenditure — they're not real spending
   const debits  = txs.filter(t => t.type === "debit" && !t.isFee);
   const fees    = txs.filter(t => t.isFee);
 
@@ -86,7 +222,6 @@ function computeScore(txs: RawTransaction[]) {
   const netCashFlow      = round2(totalIncome - totalExpenditure - totalFees);
   const cashFlowRatio    = totalExpenditure === 0 ? 2.0 : round2(totalIncome / totalExpenditure);
 
-  // Group by YYYY-MM (credits only for income stability)
   const monthMap: Record<string, { income: number; spending: number; incomeCount: number }> = {};
   for (const t of txs) {
     const ym = t.date.substring(0, 7);
@@ -102,39 +237,31 @@ function computeScore(txs: RawTransaction[]) {
   const avgMonthlyIncome = round2(totalIncome / monthCount);
   const avgDailyIncome   = round2(totalIncome / Math.max(daySpan(txs), 1));
 
-  const totalIncomeCount = credits.length;
+  const totalIncomeCount  = credits.length;
   const avgIncomePerMonth = totalIncomeCount / monthCount;
 
-  // Debt / loan events
   const debtCount = txs.filter(t =>
     /fuliza|loan repayment|kcb mpesa|okoa jahazi|m-shwari/i.test(t.description)
   ).length;
 
-  // Savings signals: lock savings, M-Shwari deposits
   const savingsCount = txs.filter(t =>
     /lock savings|m-shwari deposit|savings|fixed/i.test(t.description)
   ).length;
 
-  // Highest single withdrawal (risk signal)
   const maxWithdrawal = debits.filter(t => t.category === "Withdrawal")
     .reduce((max, t) => Math.max(max, t.amount), 0);
 
-  // Income diversity: number of distinct payers (rough)
   const payers = new Set(credits.map(t => t.description.replace(/\d{4,}/g, "").trim().toLowerCase().slice(0, 30)));
   const incomeSourceCount = payers.size;
 
-  // Bill payment regularity: how many months had at least 1 bill payment
   const monthsWithBills = months.filter(m =>
     txs.some(t => t.date.startsWith(m) && t.category === "Bill Payment")
   ).length;
 
-  // ── Factor scores ──────────────────────────────────────────────────────────
-
-  // F1: Cash flow ratio (35%)
+  // Factor scores
   const F1 = cashFlowRatio >= 2.5 ? 100 : cashFlowRatio >= 2.0 ? 90 : cashFlowRatio >= 1.5 ? 75
     : cashFlowRatio >= 1.2 ? 60 : cashFlowRatio >= 1.0 ? 42 : cashFlowRatio >= 0.8 ? 25 : 10;
 
-  // F2: Income stability — coefficient of variation (20%)
   const mean = avgMonthlyIncome;
   const cv = mean === 0 ? 1 : (() => {
     const variance = monthlyIncomeAmounts.reduce((s, x) => s + Math.pow(x - mean, 2), 0) / monthlyIncomeAmounts.length;
@@ -142,23 +269,18 @@ function computeScore(txs: RawTransaction[]) {
   })();
   const F2 = cv <= 0.10 ? 100 : cv <= 0.20 ? 85 : cv <= 0.35 ? 65 : cv <= 0.55 ? 45 : cv <= 0.80 ? 25 : 10;
 
-  // F3: Income frequency (15%)
   const F3 = avgIncomePerMonth >= 12 ? 100 : avgIncomePerMonth >= 8 ? 85 : avgIncomePerMonth >= 4 ? 65
     : avgIncomePerMonth >= 2 ? 45 : avgIncomePerMonth >= 1 ? 30 : 10;
 
-  // F4: Debt burden (15%)
   const debtRatio = totalIncome === 0 ? 0 : (txs.filter(t => t.category === "Loan").reduce((s, t) => s + t.amount, 0) / totalIncome);
   const F4 = debtCount === 0 ? 100 : debtRatio <= 0.05 ? 80 : debtRatio <= 0.10 ? 60
     : debtRatio <= 0.20 ? 40 : debtRatio <= 0.35 ? 25 : 10;
 
-  // F5: Statement coverage (5%)
   const F5 = monthCount >= 6 ? 100 : monthCount >= 4 ? 80 : monthCount >= 3 ? 65 : monthCount >= 2 ? 45 : 25;
 
-  // F6: Savings & financial discipline (5%) — bonus factor
   const F6 = savingsCount >= 3 ? 100 : savingsCount >= 1 ? 70 : incomeSourceCount >= 3 ? 60
     : monthsWithBills >= Math.floor(monthCount * 0.7) ? 55 : 30;
 
-  // F7: Income source diversity (5%)
   const F7 = incomeSourceCount >= 5 ? 100 : incomeSourceCount >= 3 ? 75 : incomeSourceCount >= 2 ? 55 : 30;
 
   const finalScore = Math.round(
@@ -179,16 +301,15 @@ function computeScore(txs: RawTransaction[]) {
   const lowest = incomeByMonth.reduce((a, b) => b.amount < a.amount ? b : a, incomeByMonth[0] ?? { month: "", amount: 0, count: 0 });
 
   const factors = [
-    { name: "Cash Flow Strength",    score: F1, weight: 35, impact: impactOf(F1), detail: `Ratio ${cashFlowRatio.toFixed(2)} — income KES ${fmt(totalIncome)} vs spending KES ${fmt(totalExpenditure)}` },
-    { name: "Income Stability",      score: F2, weight: 20, impact: impactOf(F2), detail: `CV=${cv.toFixed(2)} across ${monthCount} month${monthCount !== 1 ? "s" : ""} (lower is better)` },
-    { name: "Income Frequency",      score: F3, weight: 15, impact: impactOf(F3), detail: `Avg ${avgIncomePerMonth.toFixed(1)} income transactions/month` },
-    { name: "Debt Burden",           score: F4, weight: 15, impact: impactOf(F4), detail: `${debtCount} loan/Fuliza event${debtCount !== 1 ? "s" : ""}, ${(debtRatio * 100).toFixed(1)}% of income` },
-    { name: "Statement Coverage",    score: F5, weight: 5,  impact: impactOf(F5), detail: `${monthCount} month${monthCount !== 1 ? "s" : ""} of history` },
-    { name: "Financial Discipline",  score: F6, weight: 5,  impact: impactOf(F6), detail: `${savingsCount} savings event${savingsCount !== 1 ? "s" : ""}; bills paid in ${monthsWithBills}/${monthCount} months` },
-    { name: "Income Diversification",score: F7, weight: 5,  impact: impactOf(F7), detail: `${incomeSourceCount} distinct income source${incomeSourceCount !== 1 ? "s" : ""} detected` },
+    { name: "Cash Flow Strength",     score: F1, weight: 35, impact: impactOf(F1), detail: `Ratio ${cashFlowRatio.toFixed(2)} — income KES ${fmt(totalIncome)} vs spending KES ${fmt(totalExpenditure)}` },
+    { name: "Income Stability",       score: F2, weight: 20, impact: impactOf(F2), detail: `CV=${cv.toFixed(2)} across ${monthCount} month${monthCount !== 1 ? "s" : ""} (lower is better)` },
+    { name: "Income Frequency",       score: F3, weight: 15, impact: impactOf(F3), detail: `Avg ${avgIncomePerMonth.toFixed(1)} income transactions/month` },
+    { name: "Debt Burden",            score: F4, weight: 15, impact: impactOf(F4), detail: `${debtCount} loan/Fuliza event${debtCount !== 1 ? "s" : ""}, ${(debtRatio * 100).toFixed(1)}% of income` },
+    { name: "Statement Coverage",     score: F5, weight: 5,  impact: impactOf(F5), detail: `${monthCount} month${monthCount !== 1 ? "s" : ""} of history` },
+    { name: "Financial Discipline",   score: F6, weight: 5,  impact: impactOf(F6), detail: `${savingsCount} savings event${savingsCount !== 1 ? "s" : ""}; bills paid in ${monthsWithBills}/${monthCount} months` },
+    { name: "Income Diversification", score: F7, weight: 5,  impact: impactOf(F7), detail: `${incomeSourceCount} distinct income source${incomeSourceCount !== 1 ? "s" : ""} detected` },
   ] as const;
 
-  // Daily income map
   const dayMap: Record<string, { sum: number; count: number }> = {};
   for (const t of credits) {
     if (!dayMap[t.date]) dayMap[t.date] = { sum: 0, count: 0 };
@@ -212,11 +333,126 @@ function computeScore(txs: RawTransaction[]) {
       periodStart: txs.find(t => t.date)?.date ?? "",
       periodEnd: [...txs].reverse().find(t => t.date)?.date ?? "",
       peakIncomeMonth: peak.month, lowestIncomeMonth: lowest.month, cv,
+      monthsWithBills,
     },
     score: { finalScore, grade, label, creditLimit, riskLevel, recommendation, factors },
     dailyIncome,
     monthlyIncome,
   };
+}
+
+// ─── Deterministic insights ───────────────────────────────────────────────────
+
+function generateInsights(
+  metrics: ReturnType<typeof computeScore>["metrics"],
+  score: ReturnType<typeof computeScore>["score"]
+): BehavioralInsight[] {
+  const insights: BehavioralInsight[] = [];
+
+  // 1. Cash flow
+  if (metrics.cashFlowRatio >= 1.5) {
+    insights.push({
+      type: "positive",
+      title: "Strong positive cash flow ratio",
+      description: `Total income of KES ${fmt(metrics.totalIncome)} comfortably exceeds spending of KES ${fmt(metrics.totalExpenditure)}, yielding a cash flow ratio of ${metrics.cashFlowRatio.toFixed(2)}. This surplus indicates reliable capacity to service credit obligations.`,
+    });
+  } else if (metrics.cashFlowRatio >= 1.0) {
+    insights.push({
+      type: "warning",
+      title: "Slim cash flow margin detected",
+      description: `Income of KES ${fmt(metrics.totalIncome)} barely exceeds spending of KES ${fmt(metrics.totalExpenditure)} (ratio ${metrics.cashFlowRatio.toFixed(2)}). Any income disruption could create repayment difficulty.`,
+    });
+  } else {
+    insights.push({
+      type: "negative",
+      title: "Expenditure exceeds income",
+      description: `Spending of KES ${fmt(metrics.totalExpenditure)} exceeds income of KES ${fmt(metrics.totalIncome)} (ratio ${metrics.cashFlowRatio.toFixed(2)}). This pattern is unsustainable and signals significant financial stress.`,
+    });
+  }
+
+  // 2. Income stability
+  const cvPct = (metrics.cv * 100).toFixed(0);
+  if (metrics.cv <= 0.20) {
+    insights.push({
+      type: "positive",
+      title: "Highly consistent monthly income",
+      description: `Monthly income is stable with only ${cvPct}% variation across ${metrics.monthCount} months, averaging KES ${fmt(metrics.avgMonthlyIncome)}/month. Predictable earnings strongly support reliable loan repayment.`,
+    });
+  } else if (metrics.cv <= 0.55) {
+    insights.push({
+      type: "warning",
+      title: "Moderate income variability noted",
+      description: `Monthly income varies by ${cvPct}% around an average of KES ${fmt(metrics.avgMonthlyIncome)}/month over ${metrics.monthCount} months. Moderate fluctuations may affect repayment consistency.`,
+    });
+  } else {
+    insights.push({
+      type: "negative",
+      title: "Highly irregular income pattern",
+      description: `Income fluctuates by ${cvPct}% with an average of KES ${fmt(metrics.avgMonthlyIncome)}/month over ${metrics.monthCount} months. High irregularity poses an elevated repayment risk.`,
+    });
+  }
+
+  // 3. Debt burden
+  if (metrics.debtCount === 0) {
+    insights.push({
+      type: "positive",
+      title: "No mobile loan activity detected",
+      description: `No Fuliza, M-Shwari, KCB M-Pesa, or Okoa Jahazi events found over the ${metrics.monthCount}-month period. The customer is not reliant on short-term mobile credit, indicating self-sufficient cash management.`,
+    });
+  } else {
+    const debtPct = (metrics.debtRatio * 100).toFixed(1);
+    insights.push({
+      type: metrics.debtRatio > 0.20 ? "negative" : "warning",
+      title: `${metrics.debtCount} mobile loan event${metrics.debtCount !== 1 ? "s" : ""} detected`,
+      description: `Loan/Fuliza activity represents ${debtPct}% of total income (KES ${fmt(metrics.totalIncome)}). ${metrics.debtRatio > 0.20 ? "This elevated debt burden may impair repayment capacity for new credit." : "Debt usage is within manageable limits but should be monitored."}`,
+    });
+  }
+
+  // 4. Savings / withdrawal discipline
+  if (metrics.savingsCount >= 3) {
+    insights.push({
+      type: "positive",
+      title: "Active and consistent savings behaviour",
+      description: `${metrics.savingsCount} savings deposits (M-Shwari/Lock Savings) recorded over ${metrics.monthCount} months alongside an average monthly income of KES ${fmt(metrics.avgMonthlyIncome)}. Regular saving is a strong indicator of financial discipline.`,
+    });
+  } else if (metrics.maxWithdrawal > metrics.avgMonthlyIncome * 0.5 && metrics.avgMonthlyIncome > 0) {
+    insights.push({
+      type: "warning",
+      title: "Large single withdrawal flagged",
+      description: `A single withdrawal of KES ${fmt(metrics.maxWithdrawal)} represents ${((metrics.maxWithdrawal / metrics.avgMonthlyIncome) * 100).toFixed(0)}% of the average monthly income of KES ${fmt(metrics.avgMonthlyIncome)}. Large irregular withdrawals can destabilise cash flow.`,
+    });
+  } else {
+    insights.push({
+      type: "warning",
+      title: "Limited savings activity observed",
+      description: `Only ${metrics.savingsCount} savings event${metrics.savingsCount !== 1 ? "s" : ""} detected over ${metrics.monthCount} months. Building a regular savings habit would meaningfully improve future creditworthiness assessments.`,
+    });
+  }
+
+  // 5. Income diversification & frequency
+  const billCoverage = metrics.monthCount > 0 ? ((metrics.monthsWithBills / metrics.monthCount) * 100).toFixed(0) : "0";
+  if (metrics.incomeSourceCount >= 3) {
+    insights.push({
+      type: "positive",
+      title: "Diversified income sources detected",
+      description: `${metrics.incomeSourceCount} distinct income sources identified with ${metrics.avgIncomePerMonth.toFixed(1)} income transactions/month. Multiple payers reduce concentration risk and support stable repayment capacity.`,
+    });
+  } else if (metrics.monthsWithBills >= Math.ceil(metrics.monthCount * 0.6) && metrics.monthCount >= 2) {
+    insights.push({
+      type: "positive",
+      title: "Consistent bill payment behaviour",
+      description: `Bill payments recorded in ${metrics.monthsWithBills} of ${metrics.monthCount} months (${billCoverage}% coverage). Regular paybill and buy-goods activity shows financial responsibility and organised payment habits.`,
+    });
+  } else {
+    const diversityType = metrics.incomeSourceCount <= 1 ? "negative" : "warning" as const;
+    insights.push({
+      type: diversityType,
+      title: "Limited income diversification",
+      description: `Only ${metrics.incomeSourceCount} income source${metrics.incomeSourceCount !== 1 ? "s" : ""} detected over ${metrics.monthCount} months. Concentration in a single payer increases vulnerability to income disruption.`,
+    });
+  }
+
+  return insights.slice(0, 5);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -246,21 +482,9 @@ function gradeFor(score: number): { grade: string; label: string; limitMult: num
 
 function monthLabel(ym: string) {
   if (!ym || ym.length < 7) return ym;
-  const [y, m] = ym.split("-");
+  const [y, mo] = ym.split("-");
   const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  return `${months[parseInt(m, 10) - 1] ?? m} ${y}`;
-}
-
-// Split long text into overlapping chunks to avoid missing transactions
-function chunkText(text: string, chunkSize = 55000, overlap = 500): string[] {
-  if (text.length <= chunkSize) return [text];
-  const chunks: string[] = [];
-  let start = 0;
-  while (start < text.length) {
-    chunks.push(text.slice(start, start + chunkSize));
-    start += chunkSize - overlap;
-  }
-  return chunks;
+  return `${months[parseInt(mo, 10) - 1] ?? mo} ${y}`;
 }
 
 // ─── Route ────────────────────────────────────────────────────────────────────
@@ -273,108 +497,26 @@ router.post("/analyze/mpesa", async (req, res) => {
   }
 
   try {
-    const chunks = chunkText(text.trim());
-
-    // ── Extract transactions from all chunks in parallel ──────────────────────
-    const chunkResults = await Promise.all(
-      chunks.map(chunk =>
-        openai.chat.completions.create({
-          model: "openai/gpt-4o-mini",
-          temperature: 0,
-          max_tokens: 4000,
-          messages: [
-            { role: "system", content: EXTRACT_SYSTEM },
-            { role: "user",   content: `Extract all completed transactions from this M-Pesa statement text:\n\n${chunk}` },
-          ],
-        })
-      )
-    );
-
-    // ── Merge, deduplicate, and parse ─────────────────────────────────────────
-    let transactions: RawTransaction[] = [];
-    for (const resp of chunkResults) {
-      const raw = resp.choices[0]?.message?.content ?? "[]";
-      let parsed: RawTransaction[] = [];
-      try {
-        const arr = JSON.parse(raw);
-        parsed = Array.isArray(arr) ? arr : [];
-      } catch {
-        const m = raw.match(/\[[\s\S]*\]/);
-        if (m) { try { parsed = JSON.parse(m[0]); } catch { parsed = []; } }
-      }
-      transactions.push(...parsed);
-    }
-
-    // Deduplicate by date+amount+type+description (multi-chunk overlap may cause duplicates)
-    const seen = new Set<string>();
-    transactions = transactions.filter(t => {
-      const key = `${t.date}|${t.amount}|${t.type}|${t.description?.slice(0, 40)}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    // Parse transactions using the regex engine (fast, no API call)
+    let transactions = dedup(parseTransactions(text.trim()));
 
     // Sort by date ascending
     transactions.sort((a, b) => a.date.localeCompare(b.date));
 
-    // ── Compute all metrics deterministically ─────────────────────────────────
-    const { metrics, score, dailyIncome, monthlyIncome } = computeScore(transactions);
-
-    // ── Build a rich summary for insights ────────────────────────────────────
-    const topIncomeSources = [...new Map(
-      transactions
-        .filter(t => t.type === "credit")
-        .map(t => [t.description.slice(0, 40), t.amount])
-    ).entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([desc, amt]) => `${desc}: KES ${fmt(amt)}`).join(", ");
-
-    const categoryBreakdown = ["Bill Payment","Transfer","Withdrawal","Airtime","Loan","Business","Income"]
-      .map(cat => {
-        const sum = transactions.filter(t => t.category === cat).reduce((s, t) => s + t.amount, 0);
-        return sum > 0 ? `${cat}=KES ${fmt(sum)}` : null;
-      }).filter(Boolean).join(", ");
-
-    const insightPrompt = `Computed metrics (authoritative — do NOT invent or contradict these):
-totalIncome=KES ${fmt(metrics.totalIncome)}, totalExpenditure=KES ${fmt(metrics.totalExpenditure)},
-netCashFlow=KES ${fmt(metrics.netCashFlow)}, cashFlowRatio=${metrics.cashFlowRatio.toFixed(2)},
-avgMonthlyIncome=KES ${fmt(metrics.avgMonthlyIncome)}, monthCount=${metrics.monthCount},
-incomeFreq=${metrics.avgIncomePerMonth.toFixed(1)}/month, incomeSourceCount=${metrics.incomeSourceCount},
-debtEvents=${metrics.debtCount}, debtAsIncomePct=${(metrics.debtRatio * 100).toFixed(1)}%,
-savingsEvents=${metrics.savingsCount}, maxSingleWithdrawal=KES ${fmt(metrics.maxWithdrawal)},
-totalFees=KES ${fmt(metrics.totalFees)}, creditScore=${score.finalScore}, grade=${score.grade}
-
-Category breakdown: ${categoryBreakdown}
-Top income sources: ${topIncomeSources || "not identified"}
-
-Transaction sample (${Math.min(transactions.length, 80)} of ${transactions.length}):
-${transactions.slice(0, 80).map(t => `${t.date} ${t.type.toUpperCase()} KES ${t.amount} [${t.category}] ${t.description}`).join("\n")}
-
-Write 5 highly specific behavioral insights citing the KES figures above.`;
-
-    // ── Insights (parallel to response build) ────────────────────────────────
-    const insightsResp = await openai.chat.completions.create({
-      model: "openai/gpt-4o-mini",
-      temperature: 0,
-      max_tokens: 1200,
-      messages: [
-        { role: "system", content: INSIGHTS_SYSTEM },
-        { role: "user",   content: insightPrompt },
-      ],
-    });
-
-    let insights: BehavioralInsight[] = [];
-    const insightContent = insightsResp.choices[0]?.message?.content ?? "[]";
-    try {
-      const arr = JSON.parse(insightContent);
-      insights = Array.isArray(arr) ? arr : [];
-    } catch {
-      const m = insightContent.match(/\[[\s\S]*\]/);
-      if (m) { try { insights = JSON.parse(m[0]); } catch { insights = []; } }
+    if (transactions.length === 0) {
+      res.status(422).json({
+        error: "No transactions could be extracted from this statement. Please ensure you are uploading a valid M-Pesa statement PDF.",
+      });
+      return;
     }
 
-    // ── Deterministic reasoning ───────────────────────────────────────────────
+    // Compute all metrics deterministically
+    const { metrics, score, dailyIncome, monthlyIncome } = computeScore(transactions);
+
+    // Generate behavioral insights deterministically
+    const insights = generateInsights(metrics, score);
+
+    // Deterministic reasoning
     const reasoning =
       `${score.grade} grade: cash flow ratio of ${metrics.cashFlowRatio.toFixed(2)} ` +
       `(income KES ${fmt(metrics.totalIncome)} vs spending KES ${fmt(metrics.totalExpenditure)}) ` +
@@ -388,7 +530,7 @@ Write 5 highly specific behavioral insights citing the KES figures above.`;
         ? `${metrics.savingsCount} savings event${metrics.savingsCount > 1 ? "s" : ""} noted.`
         : "No savings activity detected.");
 
-    // ── Recent transactions (last 20, newest first) ───────────────────────────
+    // Recent transactions (last 20, newest first)
     const recentTransactions = [...transactions]
       .sort((a, b) => b.date.localeCompare(a.date))
       .slice(0, 20);
