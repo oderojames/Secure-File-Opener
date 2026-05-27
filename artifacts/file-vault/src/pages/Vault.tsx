@@ -7,7 +7,7 @@ import {
   ShieldCheck, BadgeAlert, ThumbsUp, ThumbsDown, Minus,
   ArrowDownLeft, ArrowUpRight, Lightbulb, AlertTriangle, XCircle,
   Banknote, Phone, CreditCard, RefreshCw, ShoppingBag, Building2,
-  LogOut,
+  LogOut, Menu, X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -257,6 +257,7 @@ export default function Vault() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -471,91 +472,128 @@ export default function Vault() {
 
   const isUploading = pendingPdf !== null;
 
-  return (
-    <div className="flex h-screen w-full bg-background text-foreground overflow-hidden">
+  const closeSidebar = () => setSidebarOpen(false);
 
-      {/* Sidebar */}
-      <div className="w-64 border-r border-border bg-card flex flex-col shrink-0">
-        <div className="p-4 border-b border-border">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-8 h-8 rounded bg-primary/20 flex items-center justify-center text-primary shrink-0">
-              <ShieldCheck size={17} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <h1 className="font-bold tracking-widest text-xs text-foreground">CREDIT VAULT</h1>
-              <p className="text-[10px] text-muted-foreground">M-Pesa Creditworthiness</p>
-            </div>
+  const SidebarContent = () => (
+    <>
+      <div className="p-4 border-b border-border">
+        <div className="flex items-center gap-3 mb-3">
+          <div className="w-8 h-8 rounded bg-primary/20 flex items-center justify-center text-primary shrink-0">
+            <ShieldCheck size={17} />
           </div>
-          <div className="flex items-center gap-2 bg-muted/60 rounded-lg px-2.5 py-2">
-            <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
-              <span className="text-[10px] font-bold text-primary">
-                {(user?.displayName || user?.email || 'R')[0].toUpperCase()}
-              </span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-[10px] font-medium text-foreground truncate">
-                {user?.displayName || user?.email?.split('@')[0] || 'Retailer'}
-              </p>
-              <p className="text-[9px] text-primary truncate">Retailer</p>
-            </div>
-            <button onClick={signOut} title="Sign out"
-              className="text-muted-foreground hover:text-destructive transition-colors shrink-0">
-              <LogOut size={13} />
-            </button>
+          <div className="flex-1 min-w-0">
+            <h1 className="font-bold tracking-widest text-xs text-foreground">CREDIT VAULT</h1>
+            <p className="text-[10px] text-muted-foreground">M-Pesa Creditworthiness</p>
           </div>
+          {/* Close button — mobile only */}
+          <button onClick={closeSidebar} className="md:hidden text-muted-foreground hover:text-foreground">
+            <X size={16} />
+          </button>
         </div>
-
-        <div className="flex-1 overflow-y-auto p-3 space-y-1">
-          {loadingAnalyses ? (
-            <div className="text-center p-6 text-muted-foreground">
-              <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-              <p className="text-xs">Loading...</p>
-            </div>
-          ) : analyses.length === 0 ? (
-            <div className="text-center p-6 text-muted-foreground">
-              <ShieldAlert className="mx-auto mb-3 opacity-20" size={28} />
-              <p className="text-sm">No reports yet.</p>
-              <p className="text-xs mt-1">Upload an M-Pesa PDF.</p>
-            </div>
-          ) : analyses.map(a => {
-            const score = a.result.trustScore.score;
-            const grade = a.result.trustScore.grade;
-            const color = scoreColor(score);
-            return (
-              <div key={a.id} data-testid={`analysis-${a.id}`}
-                onClick={() => { setSelectedId(a.id); setPendingPdf(null); setAnalysisError(null); }}
-                className={`group flex items-center p-2.5 rounded-lg cursor-pointer transition-all ${selectedId === a.id ? 'bg-primary/15 border border-primary/30' : 'hover:bg-accent border border-transparent'}`}>
-                <div className="mr-2.5 shrink-0 flex flex-col items-center justify-center w-8 h-8 rounded-full" style={{ background: color + '22', border: `1.5px solid ${color}55` }}>
-                  <span className="text-[10px] font-black leading-none" style={{ color }}>{grade}</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium truncate">{a.name}</div>
-                  <div className="text-[10px] text-muted-foreground">{formatDate(a.dateAdded)}</div>
-                </div>
-                <Button variant="ghost" size="icon" data-testid={`remove-${a.id}`}
-                  className="opacity-0 group-hover:opacity-100 h-6 w-6 text-muted-foreground hover:text-destructive"
-                  onClick={async e => {
-                    e.stopPropagation();
-                    await fsDeleteAnalysis(uid, a.id);
-                    setAnalyses(prev => prev.filter(x => x.id !== a.id));
-                    if (selectedId === a.id) setSelectedId(null);
-                  }}>
-                  <Trash2 size={11} />
-                </Button>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="p-3 border-t border-border">
-          <Button className="w-full text-xs" variant="outline" onClick={openPicker} size="sm" data-testid="add-btn">
-            Analyze Statement
-          </Button>
+        <div className="flex items-center gap-2 bg-muted/60 rounded-lg px-2.5 py-2">
+          <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
+            <span className="text-[10px] font-bold text-primary">
+              {(user?.displayName || user?.email || 'R')[0].toUpperCase()}
+            </span>
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[10px] font-medium text-foreground truncate">
+              {user?.displayName || user?.email?.split('@')[0] || 'Retailer'}
+            </p>
+            <p className="text-[9px] text-primary truncate">Retailer</p>
+          </div>
+          <button onClick={signOut} title="Sign out"
+            className="text-muted-foreground hover:text-destructive transition-colors shrink-0">
+            <LogOut size={13} />
+          </button>
         </div>
       </div>
 
+      <div className="flex-1 overflow-y-auto p-3 space-y-1">
+        {loadingAnalyses ? (
+          <div className="text-center p-6 text-muted-foreground">
+            <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+            <p className="text-xs">Loading...</p>
+          </div>
+        ) : analyses.length === 0 ? (
+          <div className="text-center p-6 text-muted-foreground">
+            <ShieldAlert className="mx-auto mb-3 opacity-20" size={28} />
+            <p className="text-sm">No reports yet.</p>
+            <p className="text-xs mt-1">Upload an M-Pesa PDF.</p>
+          </div>
+        ) : analyses.map(a => {
+          const score = a.result.trustScore.score;
+          const grade = a.result.trustScore.grade;
+          const color = scoreColor(score);
+          return (
+            <div key={a.id} data-testid={`analysis-${a.id}`}
+              onClick={() => { setSelectedId(a.id); setPendingPdf(null); setAnalysisError(null); closeSidebar(); }}
+              className={`group flex items-center p-2.5 rounded-lg cursor-pointer transition-all ${selectedId === a.id ? 'bg-primary/15 border border-primary/30' : 'hover:bg-accent border border-transparent'}`}>
+              <div className="mr-2.5 shrink-0 flex flex-col items-center justify-center w-8 h-8 rounded-full" style={{ background: color + '22', border: `1.5px solid ${color}55` }}>
+                <span className="text-[10px] font-black leading-none" style={{ color }}>{grade}</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-medium truncate">{a.name}</div>
+                <div className="text-[10px] text-muted-foreground">{formatDate(a.dateAdded)}</div>
+              </div>
+              <Button variant="ghost" size="icon" data-testid={`remove-${a.id}`}
+                className="opacity-0 group-hover:opacity-100 h-6 w-6 text-muted-foreground hover:text-destructive"
+                onClick={async e => {
+                  e.stopPropagation();
+                  await fsDeleteAnalysis(uid, a.id);
+                  setAnalyses(prev => prev.filter(x => x.id !== a.id));
+                  if (selectedId === a.id) setSelectedId(null);
+                }}>
+                <Trash2 size={11} />
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="p-3 border-t border-border">
+        <Button className="w-full text-xs" variant="outline" onClick={() => { openPicker(); closeSidebar(); }} size="sm" data-testid="add-btn">
+          Analyze Statement
+        </Button>
+      </div>
+    </>
+  );
+
+  return (
+    <div className="flex h-screen w-full bg-background text-foreground overflow-hidden">
+
+      {/* Mobile backdrop overlay */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-40 bg-black/60 md:hidden" onClick={closeSidebar} />
+      )}
+
+      {/* Sidebar — slide-in drawer on mobile, static on desktop */}
+      <div className={`
+        fixed md:static inset-y-0 left-0 z-50
+        w-72 md:w-64
+        border-r border-border bg-card flex flex-col shrink-0
+        transition-transform duration-250 ease-in-out
+        ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+      `}>
+        <SidebarContent />
+      </div>
+
       {/* Main */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+
+        {/* Mobile top bar */}
+        <div className="flex md:hidden items-center justify-between px-4 py-3 border-b border-border bg-card shrink-0">
+          <button onClick={() => setSidebarOpen(true)} className="text-muted-foreground hover:text-foreground p-1">
+            <Menu size={20} />
+          </button>
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={15} className="text-primary" />
+            <span className="font-bold text-sm tracking-wide">CREDIT VAULT</span>
+          </div>
+          <button onClick={openPicker} className="text-primary hover:text-primary/80 p-1" title="Analyze new statement">
+            <UploadCloud size={20} />
+          </button>
+        </div>
 
         {passwordRequired && pendingPdf ? (
           <div className="flex-1 flex items-center justify-center p-8">
@@ -597,32 +635,32 @@ export default function Vault() {
             onDragLeave={() => setDragOver(false)}
             onDrop={e => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files?.[0]) handleFileAdd(e.dataTransfer.files[0]); }}>
             <div data-testid="drop-zone"
-              className={`max-w-lg w-full border-2 border-dashed rounded-2xl p-16 text-center transition-all ${dragOver ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}>
-              <UploadCloud className="mx-auto text-muted-foreground mb-5" size={48} />
-              <h2 className="text-2xl font-bold mb-2">Upload M-Pesa Statement</h2>
-              <p className="text-sm text-muted-foreground mb-1">AI will analyze your transactions and generate</p>
-              <p className="text-sm font-semibold text-primary mb-8">a detailed creditworthiness report</p>
-              <div className="flex items-center justify-center gap-3 mb-6 text-xs text-muted-foreground">
+              className={`max-w-lg w-full border-2 border-dashed rounded-2xl p-8 sm:p-16 text-center transition-all ${dragOver ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}>
+              <UploadCloud className="mx-auto text-muted-foreground mb-4" size={40} />
+              <h2 className="text-xl sm:text-2xl font-bold mb-2">Upload M-Pesa Statement</h2>
+              <p className="text-sm text-muted-foreground mb-1">Analyzes your transactions and generates</p>
+              <p className="text-sm font-semibold text-primary mb-6">a detailed creditworthiness report</p>
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-3 mb-6 text-xs text-muted-foreground">
                 <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-green-500" /> Password-protected PDFs</span>
-                <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-green-500" /> PDF never stored — only the report</span>
+                <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-green-500" /> PDF never stored</span>
               </div>
-              <Button onClick={openPicker} size="lg" data-testid="browse-btn">Browse Files</Button>
-              <p className="text-xs text-muted-foreground mt-4">Or drag & drop · Ctrl+V to paste</p>
+              <Button onClick={openPicker} size="lg" className="w-full sm:w-auto" data-testid="browse-btn">Browse Files</Button>
+              <p className="text-xs text-muted-foreground mt-4 hidden sm:block">Or drag & drop · Ctrl+V to paste</p>
             </div>
           </div>
 
         ) : analysisResult && ts && sm ? (
-          <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4 sm:space-y-5">
 
             {/* Header */}
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-bold">{selectedAnalysis?.name}</h2>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="text-base sm:text-lg font-bold truncate">{selectedAnalysis?.name}</h2>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {sm.periodStart} — {sm.periodEnd} · {sm.totalTransactions} total transactions
+                  {sm.periodStart} — {sm.periodEnd} · {sm.totalTransactions} transactions
                 </p>
               </div>
-              <Button variant="outline" size="sm" onClick={openPicker}>Analyze New</Button>
+              <Button variant="outline" size="sm" onClick={openPicker} className="shrink-0 text-xs">Analyze New</Button>
             </div>
 
             {/* Credit score hero + recommendation */}
