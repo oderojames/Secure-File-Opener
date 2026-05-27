@@ -208,6 +208,7 @@ function RecommendationBadge({ rec }: { rec: string }) {
 
 function userCol(uid: string) { return collection(db, 'users', uid, 'vault_analyses'); }
 function userDoc(uid: string, id: string) { return doc(db, 'users', uid, 'vault_analyses', id); }
+function sharedReportDoc(id: string) { return doc(db, 'retailer_reports', id); }
 
 async function fsLoadAnalyses(uid: string): Promise<StoredAnalysis[]> {
   const snap = await getDocs(query(userCol(uid), orderBy('dateAdded', 'desc')));
@@ -216,10 +217,23 @@ async function fsLoadAnalyses(uid: string): Promise<StoredAnalysis[]> {
 
 async function fsSaveAnalysis(uid: string, analysis: StoredAnalysis): Promise<void> {
   await setDoc(userDoc(uid, analysis.id), analysis);
+  // Also write a summary to the shared top-level collection for wholesaler access
+  await setDoc(sharedReportDoc(analysis.id), {
+    id: analysis.id,
+    retailerUid: uid,
+    retailerName: analysis.retailerName ?? '',
+    retailerEmail: analysis.retailerEmail ?? '',
+    fileName: analysis.name,
+    dateAdded: analysis.dateAdded,
+    score: analysis.result.trustScore.score,
+    grade: analysis.result.trustScore.grade,
+    label: analysis.result.trustScore.label,
+  });
 }
 
 async function fsDeleteAnalysis(uid: string, id: string): Promise<void> {
   await deleteDoc(userDoc(uid, id));
+  await deleteDoc(sharedReportDoc(id)).catch(() => {});
 }
 
 export default function Vault() {
