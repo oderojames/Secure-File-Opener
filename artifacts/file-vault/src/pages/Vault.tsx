@@ -65,6 +65,9 @@ interface StoredAnalysis {
   size: number;
   dateAdded: string;
   result: AnalysisResult;
+  retailerUid?: string;
+  retailerName?: string;
+  retailerEmail?: string;
 }
 
 function fmt(n: number, currency = 'KES') {
@@ -291,6 +294,9 @@ export default function Vault() {
         size: fileSize,
         dateAdded: new Date().toISOString(),
         result,
+        retailerUid: uid,
+        retailerName: user?.displayName || user?.email?.split('@')[0] || 'Retailer',
+        retailerEmail: user?.email || '',
       };
       await fsSaveAnalysis(uid, entry);
       setAnalyses(prev => [entry, ...prev]);
