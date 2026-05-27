@@ -279,10 +279,9 @@ router.post("/analyze/mpesa", async (req, res) => {
     const chunkResults = await Promise.all(
       chunks.map(chunk =>
         openai.chat.completions.create({
-          model: "gpt-4.1",
+          model: "openai/gpt-4o-mini",
           temperature: 0,
-          seed: 42,
-          max_completion_tokens: 8000,
+          max_tokens: 4000,
           messages: [
             { role: "system", content: EXTRACT_SYSTEM },
             { role: "user",   content: `Extract all completed transactions from this M-Pesa statement text:\n\n${chunk}` },
@@ -356,10 +355,9 @@ Write 5 highly specific behavioral insights citing the KES figures above.`;
 
     // ── Insights (parallel to response build) ────────────────────────────────
     const insightsResp = await openai.chat.completions.create({
-      model: "gpt-4.1",
+      model: "openai/gpt-4o-mini",
       temperature: 0,
-      seed: 42,
-      max_completion_tokens: 1200,
+      max_tokens: 1200,
       messages: [
         { role: "system", content: INSIGHTS_SYSTEM },
         { role: "user",   content: insightPrompt },
