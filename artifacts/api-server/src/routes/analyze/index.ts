@@ -561,13 +561,10 @@ function daySpan(txs: RawTransaction[]) {
 }
 
 function gradeFor(score: number): { grade: string; label: string; limitMult: number } {
-  if (score >= 90) return { grade: "A+", label: "Excellent Credit",  limitMult: 4.5 };
-  if (score >= 80) return { grade: "A",  label: "Very Good Credit",  limitMult: 3.5 };
-  if (score >= 72) return { grade: "B+", label: "Good Credit",       limitMult: 2.5 };
-  if (score >= 63) return { grade: "B",  label: "Fair-Good Credit",  limitMult: 1.8 };
-  if (score >= 52) return { grade: "C",  label: "Fair Credit",       limitMult: 1.0 };
-  if (score >= 40) return { grade: "D",  label: "Poor Credit",       limitMult: 0.4 };
-  return             { grade: "F",  label: "Very Poor Credit", limitMult: 0 };
+  if (score >= 80) return { grade: "A", label: "Excellent Credit", limitMult: 4.0 };
+  if (score >= 60) return { grade: "B", label: "Good Credit",      limitMult: 2.5 };
+  if (score >= 50) return { grade: "C", label: "Fair Credit",      limitMult: 1.0 };
+  return             { grade: "D", label: "Poor Credit",      limitMult: 0.3 };
 }
 
 function monthLabel(ym: string) {
@@ -575,6 +572,35 @@ function monthLabel(ym: string) {
   const [y, mo] = ym.split("-");
   const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   return `${months[parseInt(mo, 10) - 1] ?? mo} ${y}`;
+}
+
+// ─── Customer name extraction ─────────────────────────────────────────────────
+
+/** Scan the first ~40 lines of the statement for the account holder's name.
+ *  M-Pesa statements typically place it near the top in patterns like:
+ *    "Customer Name: JOHN DOE"  /  "Full Statement For: JOHN DOE"  /
+ *    "Account Name: JOHN DOE"   /  "Statement for JOHN DOE WANJIRU"
+ *  Falls back to the first ALL-CAPS multi-word token block found. */
+function extractCustomerName(text: string): string | null {
+  const top = text.split("\n").slice(0, 40).join("\n");
+
+  // Pattern 1: explicit label before the name
+  const labeled = top.match(
+    /(?:customer\s*name|account\s*name|full\s*statement\s*for|statement\s*for|prepared\s*for|name)\s*[:\-]?\s*([A-Z][A-Za-z''\-]{1,}\s+[A-Z][A-Za-z'\-\s]{1,})/i
+  );
+  if (labeled) return labeled[1].trim().replace(/\s+/g, " ");
+
+  // Pattern 2: a run of 2-4 ALL-CAPS words (typical Kenyan name format)
+  const caps = top.match(/\b([A-Z]{2,}(?:\s+[A-Z]{2,}){1,3})\b/);
+  if (caps) {
+    const candidate = caps[1].trim();
+    // Reject generic header words
+    const SKIP = /^(MPESA|SAFARICOM|STATEMENT|ACCOUNT|CUSTOMER|MOBILE|MONEY|PAGE|DATE|PERIOD)$/i;
+    const words = candidate.split(/\s+/);
+    if (words.every(w => !SKIP.test(w))) return candidate;
+  }
+
+  return null;
 }
 
 // ─── Route ────────────────────────────────────────────────────────────────────
@@ -587,6 +613,8 @@ router.post("/analyze/mpesa", async (req, res) => {
   }
 
   try {
+    const customerName = extractCustomerName(text);
+
     // Parse transactions using the regex engine (fast, no API call)
     let transactions = dedup(parseTransactions(text.trim()));
 
@@ -626,6 +654,7 @@ router.post("/analyze/mpesa", async (req, res) => {
       .slice(0, 20);
 
     res.json({
+      customerName,
       dailyIncome,
       monthlyIncome,
       trustScore: {

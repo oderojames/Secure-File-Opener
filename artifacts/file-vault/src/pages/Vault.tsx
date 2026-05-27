@@ -53,6 +53,7 @@ interface RecentTransaction {
 }
 
 interface AnalysisResult {
+  customerName?: string | null;
   dailyIncome: DailyIncome[]; monthlyIncome: MonthlyIncome[];
   trustScore: TrustScore; summary: Summary;
   behavioralInsights?: BehavioralInsight[];
@@ -75,18 +76,16 @@ function fmt(n: number, currency = 'KES') {
 }
 
 function gradeColor(grade: string) {
-  if (grade?.startsWith('A')) return '#22c55e';
-  if (grade?.startsWith('B')) return '#3b82f6';
-  if (grade?.startsWith('C')) return '#f59e0b';
-  if (grade?.startsWith('D')) return '#f97316';
+  if (grade === 'A') return '#22c55e';
+  if (grade === 'B') return '#3b82f6';
+  if (grade === 'C') return '#f59e0b';
   return '#ef4444';
 }
 
 function scoreColor(score: number) {
-  if (score >= 85) return '#22c55e';
-  if (score >= 70) return '#3b82f6';
-  if (score >= 55) return '#f59e0b';
-  if (score >= 40) return '#f97316';
+  if (score >= 80) return '#22c55e';
+  if (score >= 60) return '#3b82f6';
+  if (score >= 50) return '#f59e0b';
   return '#ef4444';
 }
 
@@ -393,7 +392,7 @@ export default function Vault() {
         dateAdded: new Date().toISOString(),
         result,
         retailerUid: uid,
-        retailerName: user?.displayName || user?.email?.split('@')[0] || 'Retailer',
+        retailerName: result.customerName || user?.displayName || user?.email?.split('@')[0] || 'Retailer',
         retailerEmail: user?.email || '',
       };
       await fsSaveAnalysis(uid, entry);
