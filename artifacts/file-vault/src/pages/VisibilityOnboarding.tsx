@@ -67,8 +67,8 @@ export default function VisibilityOnboarding({ uid, onComplete }: Props) {
   const canConfirm = option === 'public' || (option === 'private' && selected.size > 0);
 
   return (
-    <div className="flex-1 flex items-center justify-center p-4 sm:p-8">
-      <div className="w-full max-w-lg">
+    <div className="flex-1 overflow-y-auto flex flex-col items-center justify-start sm:justify-center p-4 sm:p-8">
+      <div className="w-full max-w-lg py-4">
 
         {/* Header */}
         <div className="text-center mb-8">
