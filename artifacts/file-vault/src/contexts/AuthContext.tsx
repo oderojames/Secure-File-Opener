@@ -35,8 +35,24 @@ async function ensureUserDoc(user: User, role: 'retailer' | 'wholesaler' = 'reta
       email: user.email,
       displayName: user.displayName || '',
       role,
+      visibilityPreference: null,
+      allowedWholesalers: [],
       createdAt: new Date().toISOString(),
     });
+  }
+  // Ensure wholesaler is discoverable in the wholesalers collection
+  const effectiveRole = snap.exists() ? (snap.data()?.role ?? role) : role;
+  if (effectiveRole === 'wholesaler') {
+    const wsRef = doc(db, 'wholesalers', user.uid);
+    const wsSnap = await getDoc(wsRef).catch(() => null);
+    if (!wsSnap?.exists()) {
+      await setDoc(wsRef, {
+        uid: user.uid,
+        businessName: user.displayName || snap.data()?.displayName || '',
+        email: user.email || '',
+        createdAt: new Date().toISOString(),
+      }).catch(() => {});
+    }
   }
 }
 
@@ -59,7 +75,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signInWithEmail = async (email: string, password: string) => {
-    await signInWithEmailAndPassword(auth, email, password);
+    const cred = await signInWithEmailAndPassword(auth, email, password);
+    // Backfill wholesaler discoverability for existing accounts
+    const snap = await getDoc(doc(db, 'users', cred.user.uid)).catch(() => null);
+    if (snap?.data()?.role === 'wholesaler') {
+      const wsRef = doc(db, 'wholesalers', cred.user.uid);
+      const wsSnap = await getDoc(wsRef).catch(() => null);
+      if (!wsSnap?.exists()) {
+        await setDoc(wsRef, {
+          uid: cred.user.uid,
+          businessName: cred.user.displayName || snap.data()?.displayName || '',
+          email: cred.user.email || '',
+          createdAt: new Date().toISOString(),
+        }).catch(() => {});
+      }
+    }
   };
 
   const signUpWithEmail = async (name: string, email: string, password: string, role: 'retailer' | 'wholesaler' = 'retailer') => {

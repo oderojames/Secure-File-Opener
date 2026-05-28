@@ -19,6 +19,8 @@ interface ReportSummary {
   score: number;
   grade: string;
   label: string;
+  visibility?: 'public' | 'private';
+  allowedWholesalers?: string[];
 }
 
 function scoreStyle(score: number) {
@@ -33,7 +35,7 @@ function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-function RetailersManagedTab() {
+function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
   const [reports, setReports] = useState<ReportSummary[]>([]);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
@@ -54,7 +56,13 @@ function RetailersManagedTab() {
       const snap = await getDocs(
         query(collection(db, 'retailer_reports'), orderBy('dateAdded', 'desc'))
       );
-      setReports(snap.docs.map(d => d.data() as ReportSummary));
+      const all = snap.docs.map(d => d.data() as ReportSummary);
+      // Show: public reports (or old ones with no visibility field), OR private ones explicitly shared with this wholesaler
+      const visible = all.filter(r =>
+        !r.visibility || r.visibility === 'public' ||
+        (r.visibility === 'private' && r.allowedWholesalers?.includes(wholesalerUid))
+      );
+      setReports(visible);
     } catch (e: any) {
       setError(e.message || 'Failed to load reports');
     } finally {
@@ -62,7 +70,7 @@ function RetailersManagedTab() {
     }
   };
 
-  useEffect(() => { fetchReports(); }, []);
+  useEffect(() => { fetchReports(); }, [wholesalerUid]);
 
   const filtered = reports.filter(r => {
     const q = search.toLowerCase();
@@ -334,7 +342,7 @@ function WholesalerDashboard() {
       </div>
 
       <div className="relative z-10 flex-1 flex flex-col overflow-hidden">
-        <RetailersManagedTab />
+        <RetailersManagedTab wholesalerUid={user!.uid} />
       </div>
     </div>
   );

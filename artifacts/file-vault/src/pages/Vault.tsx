@@ -7,16 +7,17 @@ import {
   ShieldCheck, BadgeAlert, ThumbsUp, ThumbsDown, Minus,
   ArrowDownLeft, ArrowUpRight, Lightbulb, AlertTriangle, XCircle,
   Banknote, Phone, CreditCard, RefreshCw, ShoppingBag, Building2,
-  LogOut, Menu, X,
+  LogOut, Menu, X, Globe,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import {
-  collection, doc, getDocs, setDoc, deleteDoc, query, orderBy,
+  collection, doc, getDocs, setDoc, deleteDoc, updateDoc, getDoc, query, orderBy,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/contexts/AuthContext';
+import VisibilityOnboarding from '@/pages/VisibilityOnboarding';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -217,9 +218,14 @@ async function fsLoadAnalyses(uid: string): Promise<StoredAnalysis[]> {
   return snap.docs.map(d => d.data() as StoredAnalysis);
 }
 
-async function fsSaveAnalysis(uid: string, analysis: StoredAnalysis): Promise<void> {
+async function fsSaveAnalysis(
+  uid: string,
+  analysis: StoredAnalysis,
+  visibility: 'public' | 'private' = 'public',
+  allowedWholesalers: string[] = [],
+): Promise<void> {
   await setDoc(userDoc(uid, analysis.id), analysis);
-  // Also write a summary to the shared top-level collection for wholesaler access
+  // Write a summary to the shared top-level collection for wholesaler access
   await setDoc(sharedReportDoc(analysis.id), {
     id: analysis.id,
     retailerUid: uid,
@@ -232,6 +238,8 @@ async function fsSaveAnalysis(uid: string, analysis: StoredAnalysis): Promise<vo
     score: analysis.result.trustScore.score,
     grade: analysis.result.trustScore.grade,
     label: analysis.result.trustScore.label,
+    visibility,
+    allowedWholesalers: visibility === 'private' ? allowedWholesalers : [],
   });
 }
 
@@ -258,13 +266,26 @@ export default function Vault() {
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [visibilityPref, setVisibilityPref] = useState<'public' | 'private' | null | 'loading'>('loading');
+  const [allowedWholesalers, setAllowedWholesalers] = useState<string[]>([]);
+  const [showVisibilitySettings, setShowVisibilitySettings] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
     document.documentElement.classList.add('dark');
-    fsLoadAnalyses(uid)
-      .then(a => { setAnalyses(a); setLoadingAnalyses(false); })
-      .catch(() => setLoadingAnalyses(false));
+    Promise.all([
+      fsLoadAnalyses(uid),
+      getDoc(doc(db, 'users', uid)),
+    ]).then(([analyses, userSnap]) => {
+      setAnalyses(analyses);
+      const pref = userSnap.data()?.visibilityPreference ?? null;
+      setVisibilityPref(pref);
+      setAllowedWholesalers(userSnap.data()?.allowedWholesalers ?? []);
+      setLoadingAnalyses(false);
+    }).catch(() => {
+      setVisibilityPref(null);
+      setLoadingAnalyses(false);
+    });
   }, [uid]);
 
   const selectedAnalysis = analyses.find(a => a.id === selectedId) ?? null;
@@ -403,7 +424,7 @@ export default function Vault() {
         retailerName: user?.displayName || user?.email?.split('@')[0] || 'Retailer',
         retailerEmail: user?.email || '',
       };
-      await fsSaveAnalysis(uid, entry);
+      await fsSaveAnalysis(uid, entry, visibilityPref === 'private' ? 'private' : 'public', allowedWholesalers);
       setAnalyses(prev => [entry, ...prev]);
       setSelectedId(entry.id);
       setPendingPdf(null);
@@ -551,10 +572,26 @@ export default function Vault() {
         })}
       </div>
 
-      <div className="p-3 border-t border-border">
+      <div className="p-3 border-t border-border space-y-2">
         <Button className="w-full text-xs" variant="outline" onClick={() => { openPicker(); closeSidebar(); }} size="sm" data-testid="add-btn">
           Analyze Statement
         </Button>
+        {/* Visibility setting pill */}
+        <button
+          onClick={() => { setShowVisibilitySettings(true); closeSidebar(); }}
+          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted/50 hover:bg-muted transition-colors text-left"
+        >
+          {visibilityPref === 'public'
+            ? <Globe size={11} className="text-primary shrink-0" />
+            : <Building2 size={11} className="text-amber-400 shrink-0" />}
+          <span className="text-[10px] text-muted-foreground truncate">
+            {visibilityPref === 'public'
+              ? 'Visible to all wholesalers'
+              : visibilityPref === 'private'
+              ? `Shared with ${allowedWholesalers.length} wholesaler${allowedWholesalers.length !== 1 ? 's' : ''}`
+              : 'Set visibility…'}
+          </span>
+        </button>
       </div>
     </>
   );
@@ -595,7 +632,39 @@ export default function Vault() {
           </button>
         </div>
 
-        {passwordRequired && pendingPdf ? (
+        {/* Visibility preference loading */}
+        {visibilityPref === 'loading' ? (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+          </div>
+
+        /* First-time visibility onboarding (never set yet) */
+        ) : (visibilityPref === null || showVisibilitySettings) ? (
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {showVisibilitySettings && (
+              <div className="px-4 sm:px-6 pt-4 shrink-0">
+                <button
+                  onClick={() => setShowVisibilitySettings(false)}
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="15 18 9 12 15 6"/>
+                  </svg>
+                  Back to vault
+                </button>
+              </div>
+            )}
+            <VisibilityOnboarding
+              uid={uid}
+              onComplete={(pref, allowed) => {
+                setVisibilityPref(pref);
+                setAllowedWholesalers(allowed);
+                setShowVisibilitySettings(false);
+              }}
+            />
+          </div>
+
+        ) : passwordRequired && pendingPdf ? (
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="max-w-sm w-full bg-card border border-border rounded-2xl p-8 shadow-xl">
               <div className="flex justify-center mb-5 text-amber-400"><Lock size={44} /></div>
