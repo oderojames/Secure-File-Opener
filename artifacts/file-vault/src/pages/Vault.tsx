@@ -7,13 +7,14 @@ import {
   ShieldCheck, BadgeAlert, ThumbsUp, ThumbsDown, Minus,
   ArrowDownLeft, ArrowUpRight, Lightbulb, AlertTriangle, XCircle,
   Banknote, Phone, CreditCard, RefreshCw, ShoppingBag, Building2,
-  LogOut, Menu, X, Globe,
+  LogOut, Menu, X, Globe, Settings,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import {
-  collection, doc, getDocs, setDoc, deleteDoc, updateDoc, getDoc, query, orderBy,
+  collection, doc, getDocs, setDoc, deleteDoc, updateDoc, getDoc,
+  query, orderBy, where, writeBatch,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -246,6 +247,25 @@ async function fsSaveAnalysis(
 async function fsDeleteAnalysis(uid: string, id: string): Promise<void> {
   await deleteDoc(userDoc(uid, id));
   await deleteDoc(sharedReportDoc(id)).catch(() => {});
+}
+
+async function fsUpdateRetailerVisibility(
+  uid: string,
+  visibility: 'public' | 'private',
+  allowedWholesalers: string[],
+): Promise<void> {
+  const snap = await getDocs(
+    query(collection(db, 'retailer_reports'), where('retailerUid', '==', uid))
+  );
+  if (snap.empty) return;
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => {
+    batch.update(d.ref, {
+      visibility,
+      allowedWholesalers: visibility === 'private' ? allowedWholesalers : [],
+    });
+  });
+  await batch.commit();
 }
 
 export default function Vault() {
@@ -576,21 +596,22 @@ export default function Vault() {
         <Button className="w-full text-xs" variant="outline" onClick={() => { openPicker(); closeSidebar(); }} size="sm" data-testid="add-btn">
           Analyze Statement
         </Button>
-        {/* Visibility setting pill */}
+        {/* Sharing settings button */}
         <button
           onClick={() => { setShowVisibilitySettings(true); closeSidebar(); }}
-          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted/50 hover:bg-muted transition-colors text-left"
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border bg-muted/30 hover:bg-muted hover:border-primary/30 transition-all text-left group"
         >
-          {visibilityPref === 'public'
-            ? <Globe size={11} className="text-primary shrink-0" />
-            : <Building2 size={11} className="text-amber-400 shrink-0" />}
-          <span className="text-[10px] text-muted-foreground truncate">
-            {visibilityPref === 'public'
-              ? 'Visible to all wholesalers'
-              : visibilityPref === 'private'
-              ? `Shared with ${allowedWholesalers.length} wholesaler${allowedWholesalers.length !== 1 ? 's' : ''}`
-              : 'Set visibility…'}
-          </span>
+          <Settings size={12} className="text-muted-foreground group-hover:text-primary shrink-0 transition-colors" />
+          <div className="flex-1 min-w-0">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Sharing Settings</p>
+            <p className="text-[10px] text-muted-foreground/70 truncate mt-0.5 flex items-center gap-1">
+              {visibilityPref === 'public'
+                ? <><Globe size={9} className="text-primary shrink-0" />Visible to all wholesalers</>
+                : visibilityPref === 'private'
+                ? <><Building2 size={9} className="text-amber-400 shrink-0" />{allowedWholesalers.length} specific wholesaler{allowedWholesalers.length !== 1 ? 's' : ''}</>
+                : 'Tap to configure…'}
+            </p>
+          </div>
         </button>
       </div>
     </>
@@ -656,10 +677,14 @@ export default function Vault() {
             )}
             <VisibilityOnboarding
               uid={uid}
-              onComplete={(pref, allowed) => {
+              isEditing={showVisibilitySettings}
+              initialOption={visibilityPref === 'public' || visibilityPref === 'private' ? visibilityPref : undefined}
+              initialSelected={allowedWholesalers}
+              onComplete={async (pref, allowed) => {
                 setVisibilityPref(pref);
                 setAllowedWholesalers(allowed);
                 setShowVisibilitySettings(false);
+                await fsUpdateRetailerVisibility(uid, pref, allowed);
               }}
             />
           </div>

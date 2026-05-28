@@ -13,14 +13,17 @@ interface Wholesaler {
 
 interface Props {
   uid: string;
+  isEditing?: boolean;
+  initialOption?: 'public' | 'private';
+  initialSelected?: string[];
   onComplete: (pref: 'public' | 'private', allowedWholesalers: string[]) => void;
 }
 
-export default function VisibilityOnboarding({ uid, onComplete }: Props) {
-  const [option, setOption] = useState<'public' | 'private' | null>(null);
+export default function VisibilityOnboarding({ uid, isEditing = false, initialOption, initialSelected = [], onComplete }: Props) {
+  const [option, setOption] = useState<'public' | 'private' | null>(initialOption ?? null);
   const [wholesalers, setWholesalers] = useState<Wholesaler[]>([]);
   const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set(initialSelected));
   const [loadingWs, setLoadingWs] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -35,6 +38,14 @@ export default function VisibilityOnboarding({ uid, onComplete }: Props) {
         .finally(() => setLoadingWs(false));
     }
   }, [option]);
+
+  // When editing with private pre-selected, sync new initialSelected into state
+  useEffect(() => {
+    if (isEditing && initialOption === 'private') {
+      setSelected(new Set(initialSelected));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditing]);
 
   const filtered = wholesalers.filter(w => {
     const q = search.toLowerCase();
@@ -75,9 +86,13 @@ export default function VisibilityOnboarding({ uid, onComplete }: Props) {
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary/20 border border-primary/30 mb-4">
             <ShieldCheck size={28} className="text-primary" />
           </div>
-          <h2 className="text-2xl font-bold text-foreground">Who can see your trust score?</h2>
+          <h2 className="text-2xl font-bold text-foreground">
+            {isEditing ? 'Update sharing settings' : 'Who can see your trust score?'}
+          </h2>
           <p className="text-sm text-muted-foreground mt-2 max-w-sm mx-auto">
-            Choose how your credit reports are shared with wholesalers on Doyang.
+            {isEditing
+              ? 'Your change will apply to all your existing and future reports immediately.'
+              : 'Choose how your credit reports are shared with wholesalers on Doyang.'}
           </p>
         </div>
 
@@ -215,6 +230,8 @@ export default function VisibilityOnboarding({ uid, onComplete }: Props) {
         >
           {saving ? (
             <><Loader2 size={16} className="animate-spin" /> Saving…</>
+          ) : isEditing ? (
+            <>Save Changes <ChevronRight size={16} /></>
           ) : (
             <>Confirm & Continue <ChevronRight size={16} /></>
           )}
