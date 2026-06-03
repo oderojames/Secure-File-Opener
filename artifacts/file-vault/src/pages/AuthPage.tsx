@@ -20,8 +20,9 @@ export default function AuthPage() {
 
   const friendlyError = (code: string) => {
     if (code.includes('user-not-found') || code.includes('wrong-password') || code.includes('invalid-credential'))
-      return 'Invalid email or password.';
-    if (code.includes('email-already-in-use')) return 'An account with this email already exists.';
+      return 'Incorrect email or password. Please check your details and try again.';
+    if (code.includes('email-already-in-use'))
+      return 'An account with this email already exists. If it is your Wholesaler account, please sign in to the Wholesaler Portal instead.';
     if (code.includes('weak-password')) return 'Password must be at least 6 characters.';
     if (code.includes('invalid-email')) return 'Please enter a valid email address.';
     if (code.includes('network')) return 'Network error. Please check your connection.';
