@@ -9,7 +9,7 @@ type Tab = 'signin' | 'signup';
 
 export default function AuthPage() {
   const [, navigate] = useLocation();
-  const { signInWithEmail, signUpWithEmail, signOut } = useAuth();
+  const { signInWithEmail, signUpWithEmail, signOut, sendPasswordReset } = useAuth();
   const [tab, setTab] = useState<Tab>('signin');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -17,6 +17,29 @@ export default function AuthPage() {
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetStatus, setResetStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [resetError, setResetError] = useState<string | null>(null);
+
+  const handleForgotPassword = async () => {
+    if (!email.trim()) {
+      setResetError('Enter your email address above first.');
+      setResetStatus('error');
+      return;
+    }
+    setResetStatus('sending');
+    setResetError(null);
+    try {
+      await sendPasswordReset(email.trim());
+      setResetStatus('sent');
+    } catch (e: any) {
+      setResetStatus('error');
+      setResetError(
+        e.code?.includes('user-not-found')
+          ? 'No account found with this email.'
+          : 'Could not send reset email. Please try again.'
+      );
+    }
+  };
 
   const friendlyError = (code: string) => {
     if (code.includes('user-not-found') || code.includes('wrong-password') || code.includes('invalid-credential'))
@@ -114,6 +137,33 @@ export default function AuthPage() {
                 {showPwd ? <EyeOff size={15} /> : <Eye size={15} />}
               </button>
             </div>
+
+            {tab === 'signin' && (
+              <div className="flex justify-end -mt-1">
+                <button
+                  type="button"
+                  disabled={resetStatus === 'sending'}
+                  onClick={handleForgotPassword}
+                  className="text-xs text-primary hover:underline disabled:opacity-50 transition-colors"
+                >
+                  {resetStatus === 'sending' ? 'Sending…' : 'Forgot password?'}
+                </button>
+              </div>
+            )}
+
+            {tab === 'signin' && resetStatus === 'sent' && (
+              <div className="flex items-center gap-2 text-emerald-400 text-sm bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2">
+                <AlertCircle size={14} className="shrink-0" />
+                <span>Reset email sent — check your inbox.</span>
+              </div>
+            )}
+
+            {tab === 'signin' && resetStatus === 'error' && resetError && (
+              <div className="flex items-center gap-2 text-destructive text-sm bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">
+                <AlertCircle size={14} className="shrink-0" />
+                <span>{resetError}</span>
+              </div>
+            )}
 
             {error && (
               <div className="flex items-center gap-2 text-destructive text-sm bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">
