@@ -1,7 +1,12 @@
 import { Router } from "express";
 import OpenAI from "openai";
 
-const openai = new OpenAI({ apiKey: process.env["OPENAI_API_KEY"] });
+const apiKey = process.env["OPENAI_API_KEY"] ?? "";
+const isOpenRouter = apiKey.startsWith("sk-or-");
+const openai = new OpenAI({
+  apiKey,
+  ...(isOpenRouter ? { baseURL: "https://openrouter.ai/api/v1" } : {}),
+});
 
 const router = Router();
 
