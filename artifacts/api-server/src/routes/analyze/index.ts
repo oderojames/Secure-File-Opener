@@ -1,4 +1,7 @@
 import { Router } from "express";
+import OpenAI from "openai";
+
+const openai = new OpenAI({ apiKey: process.env["OPENAI_API_KEY"] });
 
 const router = Router();
 
@@ -653,6 +656,71 @@ function extractCustomerPhone(text: string): string | null {
   return null;
 }
 
+// ─── AI summary extraction ────────────────────────────────────────────────────
+
+interface AISummary {
+  paidIn: number;
+  paidOut: number;
+  openingBalance: number | null;
+  closingBalance: number | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  currency: string;
+  customerName: string | null;
+  customerPhone: string | null;
+}
+
+async function extractSummaryWithAI(text: string): Promise<AISummary | null> {
+  if (!process.env["OPENAI_API_KEY"]) return null;
+
+  // Send only the first 6000 chars — the summary is always near the top/bottom
+  const excerpt = text.slice(0, 6000);
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    max_tokens: 512,
+    temperature: 0,
+    messages: [
+      {
+        role: "system",
+        content: `You are a financial data extractor for Safaricom M-Pesa statements.
+Extract ONLY from the statement summary section (not individual transaction rows).
+Return a JSON object with these fields (use null if not found):
+- paidIn: number — total money received / paid in (this is the INCOME figure)
+- paidOut: number — total money sent out / withdrawn / paid out (this is the EXPENDITURE figure)
+- openingBalance: number | null
+- closingBalance: number | null
+- periodStart: string | null — ISO date YYYY-MM-DD
+- periodEnd: string | null — ISO date YYYY-MM-DD
+- currency: string — default "KES"
+- customerName: string | null
+- customerPhone: string | null
+
+Rules:
+- Strip commas from numbers (e.g. "12,345.67" → 12345.67)
+- "Paid In" = income. "Withdrawn" / "Paid Out" / "Money Out" = expenditure.
+- Return ONLY valid JSON, no explanation.`,
+      },
+      {
+        role: "user",
+        content: `M-Pesa statement text:\n\n${excerpt}`,
+      },
+    ],
+  });
+
+  const raw = response.choices[0]?.message?.content?.trim() ?? "";
+  // Strip markdown code fences if present
+  const clean = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+
+  try {
+    const parsed = JSON.parse(clean) as AISummary;
+    if (typeof parsed.paidIn !== "number" || typeof parsed.paidOut !== "number") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 router.post("/analyze/mpesa", async (req, res) => {
@@ -663,13 +731,8 @@ router.post("/analyze/mpesa", async (req, res) => {
   }
 
   try {
-    const customerName  = extractCustomerName(text);
-    const customerPhone = extractCustomerPhone(text);
-
-    // Parse transactions using the regex engine (fast, no API call)
+    // ── Step 1: Parse individual transactions (for monthly/daily breakdown) ──
     let transactions = dedup(parseTransactions(text.trim()));
-
-    // Sort by date ascending
     transactions.sort((a, b) => a.date.localeCompare(b.date));
 
     if (transactions.length === 0) {
@@ -679,25 +742,70 @@ router.post("/analyze/mpesa", async (req, res) => {
       return;
     }
 
-    // Compute all metrics deterministically
-    const { metrics, score, dailyIncome, monthlyIncome } = computeScore(transactions);
+    // ── Step 2: AI extracts authoritative totals from the summary section ────
+    // Run AI extraction and transaction scoring in parallel
+    const [aiSummary, scored] = await Promise.all([
+      extractSummaryWithAI(text),
+      Promise.resolve(computeScore(transactions)),
+    ]);
 
-    // Generate behavioral insights deterministically
-    const insights = generateInsights(metrics, score);
+    const { metrics, score, dailyIncome, monthlyIncome } = scored;
 
-    // Deterministic reasoning
+    // ── Step 3: Override totals with AI-extracted summary figures ─────────────
+    // The M-Pesa summary section is authoritative — use it when available.
+    // Individual transaction parsing is used only for breakdowns & insights.
+    const totalIncome      = aiSummary?.paidIn  ?? metrics.totalIncome;
+    const totalExpenditure = aiSummary?.paidOut ?? metrics.totalExpenditure;
+    const netCashFlow      = round2(totalIncome - totalExpenditure);
+    const cashFlowRatio    = totalExpenditure === 0
+      ? 2.0
+      : round2(totalIncome / totalExpenditure);
+
+    // Recalculate averages using the AI-sourced income total
+    const monthCount         = metrics.monthCount || 1;
+    const dayCount           = Math.max(daySpan(transactions), 1);
+    const averageMonthlyIncome = round2(totalIncome / monthCount);
+    const averageDailyIncome   = round2(totalIncome / dayCount);
+
+    // Override credit limit using AI-sourced average monthly income
+    const { grade, label, limitMult } = gradeFor(score.finalScore);
+    const creditLimit = Math.round(averageMonthlyIncome * limitMult);
+
+    // Period dates — prefer AI-detected, fall back to transaction range
+    const periodStart = aiSummary?.periodStart ?? metrics.periodStart;
+    const periodEnd   = aiSummary?.periodEnd   ?? metrics.periodEnd;
+
+    // Customer identity — prefer AI-detected
+    const customerName  = aiSummary?.customerName  ?? extractCustomerName(text);
+    const customerPhone = aiSummary?.customerPhone ?? extractCustomerPhone(text);
+    const currency      = aiSummary?.currency ?? "KES";
+
+    // ── Step 4: Re-generate insights using the corrected figures ─────────────
+    const correctedMetrics = {
+      ...metrics,
+      totalIncome,
+      totalExpenditure,
+      netCashFlow,
+      cashFlowRatio,
+      avgMonthlyIncome: averageMonthlyIncome,
+      avgDailyIncome:   averageDailyIncome,
+    };
+    const insights = generateInsights(correctedMetrics, score);
+
+    // ── Step 5: Build reasoning string ────────────────────────────────────────
     const reasoning =
-      `${score.grade} grade: cash flow ratio of ${metrics.cashFlowRatio.toFixed(2)} ` +
-      `(income KES ${fmt(metrics.totalIncome)} vs spending KES ${fmt(metrics.totalExpenditure)}) ` +
-      `over ${metrics.monthCount} month${metrics.monthCount !== 1 ? "s" : ""}, ` +
-      `averaging KES ${fmt(metrics.avgMonthlyIncome)}/month. ` +
+      `${grade} grade: cash flow ratio of ${cashFlowRatio.toFixed(2)} ` +
+      `(income KES ${fmt(totalIncome)} vs spending KES ${fmt(totalExpenditure)}) ` +
+      `over ${monthCount} month${monthCount !== 1 ? "s" : ""}, ` +
+      `averaging KES ${fmt(averageMonthlyIncome)}/month. ` +
       (metrics.debtCount > 0
         ? `${metrics.debtCount} loan/Fuliza event${metrics.debtCount > 1 ? "s" : ""} ` +
           `represent ${(metrics.debtRatio * 100).toFixed(1)}% of income. `
         : "No loan or Fuliza activity detected. ") +
       (metrics.savingsCount > 0
         ? `${metrics.savingsCount} savings event${metrics.savingsCount > 1 ? "s" : ""} noted.`
-        : "No savings activity detected.");
+        : "No savings activity detected.") +
+      (aiSummary ? " (Figures sourced from statement summary.)" : "");
 
     // Recent transactions (last 20, newest first)
     const recentTransactions = [...transactions]
@@ -711,26 +819,26 @@ router.post("/analyze/mpesa", async (req, res) => {
       monthlyIncome,
       trustScore: {
         score: score.finalScore,
-        grade: score.grade,
-        label: score.label,
-        creditLimit: score.creditLimit,
+        grade,
+        label,
+        creditLimit,
         reasoning,
         factors: score.factors,
         riskLevel: score.riskLevel,
         recommendation: score.recommendation,
       },
       summary: {
-        totalIncome: metrics.totalIncome,
-        totalExpenditure: metrics.totalExpenditure,
-        netCashFlow: metrics.netCashFlow,
-        cashFlowRatio: metrics.cashFlowRatio,
-        averageMonthlyIncome: metrics.avgMonthlyIncome,
-        averageDailyIncome: metrics.avgDailyIncome,
+        totalIncome,
+        totalExpenditure,
+        netCashFlow,
+        cashFlowRatio,
+        averageMonthlyIncome,
+        averageDailyIncome,
         peakIncomeMonth: monthLabel(metrics.peakIncomeMonth),
         lowestIncomeMonth: monthLabel(metrics.lowestIncomeMonth),
-        currency: "KES",
-        periodStart: metrics.periodStart,
-        periodEnd: metrics.periodEnd,
+        currency,
+        periodStart,
+        periodEnd,
         totalTransactions: metrics.totalTransactions,
         incomeTransactions: metrics.incomeTransactions,
         expenditureTransactions: metrics.expenditureTransactions,
