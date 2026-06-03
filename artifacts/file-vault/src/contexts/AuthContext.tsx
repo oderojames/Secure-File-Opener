@@ -8,8 +8,11 @@ import {
   signOut as firebaseSignOut,
   updateProfile,
   sendPasswordResetEmail,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  deleteUser,
 } from 'firebase/auth';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, deleteDoc, collection, getDocs, query, where, writeBatch } from 'firebase/firestore';
 import { auth, googleProvider, db } from '@/lib/firebase';
 
 interface AuthUser extends User {
@@ -24,6 +27,7 @@ interface AuthContextValue {
   signInWithGoogle: (role?: 'retailer' | 'wholesaler') => Promise<void>;
   signOut: () => Promise<void>;
   sendPasswordReset: (email: string) => Promise<void>;
+  deleteAccount: (password: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -118,8 +122,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const deleteAccount = async (password: string) => {
+    const currentUser = auth.currentUser;
+    if (!currentUser || !currentUser.email) throw { code: 'auth/no-user' };
+    const credential = EmailAuthProvider.credential(currentUser.email, password);
+    await reauthenticateWithCredential(currentUser, credential);
+    const snap = await getDoc(doc(db, 'users', currentUser.uid)).catch(() => null);
+    const role = snap?.data()?.role ?? 'retailer';
+    if (role === 'retailer') {
+      const analysesSnap = await getDocs(collection(db, 'users', currentUser.uid, 'vault_analyses')).catch(() => null);
+      if (analysesSnap && !analysesSnap.empty) {
+        const batch = writeBatch(db);
+        analysesSnap.docs.forEach(d => batch.delete(d.ref));
+        await batch.commit().catch(() => {});
+      }
+      const reportsSnap = await getDocs(query(collection(db, 'retailer_reports'), where('retailerUid', '==', currentUser.uid))).catch(() => null);
+      if (reportsSnap && !reportsSnap.empty) {
+        const batch = writeBatch(db);
+        reportsSnap.docs.forEach(d => batch.delete(d.ref));
+        await batch.commit().catch(() => {});
+      }
+    } else {
+      await deleteDoc(doc(db, 'wholesalers', currentUser.uid)).catch(() => {});
+    }
+    await deleteDoc(doc(db, 'users', currentUser.uid)).catch(() => {});
+    await deleteUser(currentUser);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, signInWithEmail, signUpWithEmail, signInWithGoogle, signOut, sendPasswordReset }}>
+    <AuthContext.Provider value={{ user, loading, signInWithEmail, signUpWithEmail, signInWithGoogle, signOut, sendPasswordReset, deleteAccount }}>
       {children}
     </AuthContext.Provider>
   );

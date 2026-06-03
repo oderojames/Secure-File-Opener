@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/contexts/AuthContext';
 import WholesalerAuthPage from '@/pages/WholesalerAuthPage';
-import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check } from 'lucide-react';
+import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { collection, getDocs, query, orderBy } from 'firebase/firestore';
@@ -297,15 +297,39 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
 }
 
 function WholesalerDashboard() {
-  const { user, signOut } = useAuth();
+  const { user, signOut, deleteAccount } = useAuth();
   const [, navigate] = useLocation();
+
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const handleSignOut = async () => {
     await signOut();
     navigate('/');
   };
 
-  return (
+  const handleDeleteAccount = async () => {
+    if (!deletePassword.trim()) { setDeleteError('Please enter your password to confirm.'); return; }
+    setDeleteLoading(true);
+    setDeleteError(null);
+    try {
+      await deleteAccount(deletePassword);
+    } catch (e: any) {
+      const code = e?.code ?? '';
+      if (code.includes('wrong-password') || code.includes('invalid-credential')) {
+        setDeleteError('Incorrect password. Please try again.');
+      } else if (code.includes('too-many-requests')) {
+        setDeleteError('Too many attempts. Please wait before trying again.');
+      } else {
+        setDeleteError('Failed to delete account. Please try again.');
+      }
+      setDeleteLoading(false);
+    }
+  };
+
+  return (<>
     <div className="min-h-screen w-full bg-background flex flex-col">
       <div className="fixed inset-0 bg-[linear-gradient(hsl(220_15%_10%/0.6)_1px,transparent_1px),linear-gradient(90deg,hsl(220_15%_10%/0.6)_1px,transparent_1px)] bg-[size:40px_40px] opacity-20 pointer-events-none" />
 
@@ -322,6 +346,9 @@ function WholesalerDashboard() {
           <span className="text-xs text-muted-foreground hidden sm:block truncate max-w-[140px]">
             {user?.displayName || user?.email?.split('@')[0]}
           </span>
+          <Button variant="ghost" size="sm" onClick={() => { setShowDeleteModal(true); setDeletePassword(''); setDeleteError(null); }} className="gap-1.5 text-muted-foreground hover:text-destructive text-xs px-2" title="Delete account">
+            <Trash2 size={13} />
+          </Button>
           <Button variant="ghost" size="sm" onClick={handleSignOut} className="gap-1.5 text-muted-foreground hover:text-foreground text-xs px-2 sm:px-3">
             <LogOut size={13} /> <span className="hidden sm:inline">Sign out</span>
           </Button>
@@ -345,7 +372,64 @@ function WholesalerDashboard() {
         <RetailersManagedTab wholesalerUid={user!.uid} />
       </div>
     </div>
-  );
+
+    {showDeleteModal && (
+      <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={e => { if (e.target === e.currentTarget) setShowDeleteModal(false); }}>
+        <div className="bg-card border border-destructive/30 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-xl bg-destructive/15 flex items-center justify-center shrink-0">
+              <Trash2 size={18} className="text-destructive" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-foreground">Delete Account</h3>
+              <p className="text-xs text-muted-foreground">This cannot be undone</p>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground mb-4 leading-relaxed">
+            This will permanently delete your wholesaler account and all associated data. Enter your password to confirm.
+          </p>
+          <div className="relative mb-3">
+            <Lock size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="password"
+              placeholder="Your password"
+              value={deletePassword}
+              onChange={e => { setDeletePassword(e.target.value); setDeleteError(null); }}
+              onKeyDown={e => e.key === 'Enter' && handleDeleteAccount()}
+              className="w-full pl-8 pr-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-destructive"
+              autoFocus
+            />
+          </div>
+          {deleteError && (
+            <div className="flex items-center gap-2 text-destructive text-xs bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 mb-3">
+              <AlertCircle size={12} className="shrink-0" />
+              <span>{deleteError}</span>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowDeleteModal(false)}
+              disabled={deleteLoading}
+              className="flex-1 py-2 text-xs font-semibold rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleDeleteAccount}
+              disabled={deleteLoading}
+              className="flex-1 py-2 text-xs font-semibold rounded-lg bg-destructive hover:bg-destructive/90 text-white transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+            >
+              {deleteLoading ? (
+                <><span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />Deleting…</>
+              ) : (
+                <><Trash2 size={12} />Delete My Account</>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+  </>);
 }
 
 export default function WholesalerPage() {
