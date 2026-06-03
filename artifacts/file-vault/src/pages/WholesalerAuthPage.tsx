@@ -32,12 +32,20 @@ export default function WholesalerAuthPage() {
       await sendPasswordReset(email.trim());
       setResetStatus('sent');
     } catch (e: any) {
+      console.error('[ForgotPassword] Firebase error:', e?.code, e?.message);
       setResetStatus('error');
-      setResetError(
-        e.code?.includes('user-not-found')
-          ? 'No account found with this email.'
-          : 'Could not send reset email. Please try again.'
-      );
+      const code = e?.code ?? '';
+      if (code.includes('user-not-found')) {
+        setResetError('No account found with this email address.');
+      } else if (code.includes('invalid-email')) {
+        setResetError('Please enter a valid email address.');
+      } else if (code.includes('too-many-requests')) {
+        setResetError('Too many attempts. Please wait a few minutes and try again.');
+      } else if (code.includes('unauthorized-continue-uri') || code.includes('invalid-continue-uri')) {
+        setResetError('Reset email could not be sent due to a configuration issue. Please contact support.');
+      } else {
+        setResetError(`Could not send reset email (${code || 'unknown error'}). Please try again.`);
+      }
     }
   };
 
@@ -155,9 +163,9 @@ export default function WholesalerAuthPage() {
             )}
 
             {tab === 'signin' && resetStatus === 'sent' && (
-              <div className="flex items-center gap-2 text-emerald-400 text-sm bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2">
-                <AlertCircle size={14} className="shrink-0" />
-                <span>Reset email sent — check your inbox.</span>
+              <div className="flex flex-col gap-0.5 text-emerald-400 text-sm bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2.5">
+                <span className="font-semibold">Reset email sent!</span>
+                <span className="text-xs text-emerald-400/80">Check your inbox and spam/junk folder. The link expires in 1 hour.</span>
               </div>
             )}
 

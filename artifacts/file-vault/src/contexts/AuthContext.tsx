@@ -112,7 +112,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const sendPasswordReset = async (email: string) => {
-    await sendPasswordResetEmail(auth, email);
+    await sendPasswordResetEmail(auth, email, {
+      url: 'https://tournament-ddcb7.firebaseapp.com',
+      handleCodeInApp: false,
+    });
   };
 
   return (
