@@ -72,7 +72,7 @@ export default function WholesalerAuthPage() {
         const { role } = await signInWithEmail(email, password);
         if (role === 'retailer') {
           await signOut();
-          setError('This account is registered as a Retailer. Please use the Retailer Portal or create a new Wholesaler account.');
+          setError('This email is already registered in the Retailer Portal. Please sign in there, or create a new Wholesaler account.');
           return;
         }
       }
