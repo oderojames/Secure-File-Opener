@@ -9,7 +9,7 @@ type Tab = 'signin' | 'signup';
 
 export default function AuthPage() {
   const [, navigate] = useLocation();
-  const { signInWithEmail, signUpWithEmail } = useAuth();
+  const { signInWithEmail, signUpWithEmail, signOut } = useAuth();
   const [tab, setTab] = useState<Tab>('signin');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -35,9 +35,14 @@ export default function AuthPage() {
     try {
       if (tab === 'signup') {
         if (!name.trim()) { setError('Please enter your name.'); setLoading(false); return; }
-        await signUpWithEmail(name.trim(), email, password);
+        await signUpWithEmail(name.trim(), email, password, 'retailer');
       } else {
-        await signInWithEmail(email, password);
+        const { role } = await signInWithEmail(email, password);
+        if (role === 'wholesaler') {
+          await signOut();
+          setError('This account is registered as a Wholesaler. Please use the Wholesaler Portal or create a new Retailer account.');
+          return;
+        }
       }
     } catch (e: any) {
       setError(friendlyError(e.code ?? ''));

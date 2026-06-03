@@ -349,7 +349,8 @@ function WholesalerDashboard() {
 }
 
 export default function WholesalerPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, signOut } = useAuth();
+  const [, navigate] = useLocation();
 
   if (loading) {
     return (
@@ -363,5 +364,41 @@ export default function WholesalerPage() {
   }
 
   if (!user) return <WholesalerAuthPage />;
+
+  if (user.role === 'retailer') {
+    return (
+      <div className="min-h-screen w-full bg-background flex items-center justify-center p-4">
+        <div className="max-w-md w-full text-center space-y-6">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/20 border border-primary/30">
+            <Building2 size={28} className="text-primary" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-foreground">Wrong Portal</h2>
+            <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
+              Your account is registered as a{' '}
+              <span className="font-semibold text-foreground">Retailer</span>.
+              This is the <span className="font-semibold text-foreground">Wholesaler Portal</span>.
+            </p>
+          </div>
+          <div className="flex flex-col gap-3">
+            <a
+              href="/retailer"
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground font-semibold py-2.5 px-4 transition-colors text-sm"
+            >
+              <Building2 size={15} />
+              Go to Retailer Portal
+            </a>
+            <button
+              onClick={async () => { await signOut(); navigate('/'); }}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-border hover:bg-muted text-foreground font-semibold py-2.5 px-4 transition-colors text-sm"
+            >
+              Sign out &amp; switch account
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return <WholesalerDashboard />;
 }

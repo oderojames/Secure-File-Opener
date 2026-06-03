@@ -9,7 +9,7 @@ type Tab = 'signin' | 'signup';
 
 export default function WholesalerAuthPage() {
   const [, navigate] = useLocation();
-  const { signInWithEmail, signUpWithEmail } = useAuth();
+  const { signInWithEmail, signUpWithEmail, signOut } = useAuth();
   const [tab, setTab] = useState<Tab>('signin');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -37,7 +37,12 @@ export default function WholesalerAuthPage() {
         if (!name.trim()) { setError('Please enter your name.'); setLoading(false); return; }
         await signUpWithEmail(name.trim(), email, password, 'wholesaler');
       } else {
-        await signInWithEmail(email, password);
+        const { role } = await signInWithEmail(email, password);
+        if (role === 'retailer') {
+          await signOut();
+          setError('This account is registered as a Retailer. Please use the Retailer Portal or create a new Wholesaler account.');
+          return;
+        }
       }
     } catch (e: any) {
       setError(friendlyError(e.code ?? ''));

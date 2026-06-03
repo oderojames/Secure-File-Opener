@@ -18,7 +18,7 @@ interface AuthUser extends User {
 interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
-  signInWithEmail: (email: string, password: string) => Promise<void>;
+  signInWithEmail: (email: string, password: string) => Promise<{ role: 'retailer' | 'wholesaler' }>;
   signUpWithEmail: (name: string, email: string, password: string, role?: 'retailer' | 'wholesaler') => Promise<void>;
   signInWithGoogle: (role?: 'retailer' | 'wholesaler') => Promise<void>;
   signOut: () => Promise<void>;
@@ -74,22 +74,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return unsub;
   }, []);
 
-  const signInWithEmail = async (email: string, password: string) => {
+  const signInWithEmail = async (email: string, password: string): Promise<{ role: 'retailer' | 'wholesaler' }> => {
     const cred = await signInWithEmailAndPassword(auth, email, password);
-    // Backfill wholesaler discoverability for existing accounts
     const snap = await getDoc(doc(db, 'users', cred.user.uid)).catch(() => null);
-    if (snap?.data()?.role === 'wholesaler') {
+    const role: 'retailer' | 'wholesaler' = (snap?.data()?.role as 'retailer' | 'wholesaler') ?? 'retailer';
+    // Backfill wholesaler discoverability for existing accounts
+    if (role === 'wholesaler') {
       const wsRef = doc(db, 'wholesalers', cred.user.uid);
       const wsSnap = await getDoc(wsRef).catch(() => null);
       if (!wsSnap?.exists()) {
         await setDoc(wsRef, {
           uid: cred.user.uid,
-          businessName: cred.user.displayName || snap.data()?.displayName || '',
+          businessName: cred.user.displayName || snap?.data()?.displayName || '',
           email: cred.user.email || '',
           createdAt: new Date().toISOString(),
         }).catch(() => {});
       }
     }
+    return { role };
   };
 
   const signUpWithEmail = async (name: string, email: string, password: string, role: 'retailer' | 'wholesaler' = 'retailer') => {
