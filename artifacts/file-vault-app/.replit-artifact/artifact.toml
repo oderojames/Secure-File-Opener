@@ -1,6 +1,6 @@
 kind = "web"
-previewPath = "/"
-title = "File Vault"
+previewPath = "/__stub/"
+title = "File Vault (stub)"
 version = "1.0.0"
 id = "artifacts/file-vault-app"
 router = "path"
@@ -11,7 +11,7 @@ version = "1.0.0"
 
 [[services]]
 name = "web"
-paths = [ "/" ]
+paths = [ "/__stub/" ]
 localPort = 18854
 
 [services.development]
@@ -28,4 +28,4 @@ to = "/index.html"
 
 [services.env]
 PORT = "18854"
-BASE_PATH = "/"
+BASE_PATH = "/__stub/"
