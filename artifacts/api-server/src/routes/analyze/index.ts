@@ -98,7 +98,7 @@ const FEE_RE = /transaction cost|charge for/i;
 const FAILED_RE = /\b(failed|reversed|cancelled|declined)\b/i;
 
 const SKIP_RE =
-  /^(receipt no|completion time|details|transaction status|paid in|withdrawn|balance|transaction|m-pesa statement|safaricom|page \d|customer name|account no|phone|period:|opening balance|closing balance|statement period|dear |to whom)/i;
+  /^(receipt no|completion time|details|transaction status|paid in|withdrawn|balance|transaction|m-pesa statement|safaricom|page \d|customer name|account no|phone|period:|opening balance|closing balance|statement period|dear |to whom|total paid|total withdrawn|total money|summary)/i;
 
 function classify(text: string): "credit" | "debit" | null {
   if (CREDIT_RE.test(text)) return "credit";
@@ -110,11 +110,18 @@ function classify(text: string): "credit" | "debit" | null {
 
 function cleanDescription(text: string): string {
   return text
+    // Strip frontend column tags first (|PAIDIN=xxx, |WITHDRAWN=xxx, |BALANCE=xxx)
+    .replace(/\s*\|(?:PAIDIN|WITHDRAWN|BALANCE)=[\d.]*\s*/gi, " ")
+    // Strip dates and times
     .replace(/\b\d{1,2}[\/\-]\d{1,2}[\/\-](?:20)?\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?\b/g, "")
     .replace(/\b20\d{2}-\d{2}-\d{2}(?:[\sT]\d{1,2}:\d{2}(?::\d{2})?)?\b/g, "")
     .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?\b/gi, "")
+    // Strip monetary amounts (comma-formatted and unformatted 4+ digit numbers)
     .replace(AMOUNT_RE, "")
-    .replace(/\b[A-Z]{2,4}[A-Z0-9]{6,10}\b/g, "") // receipt numbers
+    .replace(/\b\d{4,}(?:\.\d{1,2})?\b/g, "")
+    // Strip receipt numbers — require at least one digit to avoid matching English words
+    .replace(/\b[A-Z]{2,4}[A-Z0-9]{6,10}\b/g, m => /\d/.test(m) ? "" : m)
+    // Strip status words
     .replace(/\b(completed|failed|cancelled|declined|reversed)\b/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
