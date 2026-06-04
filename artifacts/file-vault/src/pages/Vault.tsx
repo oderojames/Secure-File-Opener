@@ -239,6 +239,8 @@ async function fsSaveAnalysis(
     score: analysis.result.trustScore.score,
     grade: analysis.result.trustScore.grade,
     label: analysis.result.trustScore.label,
+    periodStart: analysis.result.summary?.periodStart ?? null,
+    periodEnd: analysis.result.summary?.periodEnd ?? null,
     visibility,
     allowedWholesalers: visibility === 'private' ? allowedWholesalers : [],
   });

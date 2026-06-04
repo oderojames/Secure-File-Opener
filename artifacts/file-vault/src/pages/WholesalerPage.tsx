@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/contexts/AuthContext';
 import WholesalerAuthPage from '@/pages/WholesalerAuthPage';
-import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock } from 'lucide-react';
+import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock, Calendar } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { collection, getDocs, query, orderBy } from 'firebase/firestore';
@@ -19,6 +19,8 @@ interface ReportSummary {
   score: number;
   grade: string;
   label: string;
+  periodStart?: string | null;
+  periodEnd?: string | null;
   visibility?: 'public' | 'private';
   allowedWholesalers?: string[];
 }
@@ -33,6 +35,12 @@ function scoreStyle(score: number) {
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function formatPeriod(start?: string | null, end?: string | null) {
+  if (!start || !end) return null;
+  const fmt = (iso: string) => new Date(iso).toLocaleDateString('en-KE', { month: 'short', year: 'numeric' });
+  return `${fmt(start)} – ${fmt(end)}`;
 }
 
 function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
@@ -182,6 +190,12 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
                           </div>
                         )}
                         <p className="text-[10px] text-muted-foreground pt-0.5">{formatDate(r.dateAdded)}</p>
+                        {formatPeriod(r.periodStart, r.periodEnd) && (
+                          <div className="flex items-center gap-1 pt-0.5">
+                            <Calendar size={9} className="text-amber-400/70 shrink-0" />
+                            <p className="text-[10px] text-amber-400/80">{formatPeriod(r.periodStart, r.periodEnd)}</p>
+                          </div>
+                        )}
                       </div>
 
                       {/* Right: score gauge */}
@@ -283,8 +297,16 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
                       </div>
                     </div>
 
-                    {/* Date */}
-                    <span className="text-xs text-muted-foreground">{formatDate(r.dateAdded)}</span>
+                    {/* Date + Period */}
+                    <div className="space-y-0.5">
+                      <span className="text-xs text-muted-foreground">{formatDate(r.dateAdded)}</span>
+                      {formatPeriod(r.periodStart, r.periodEnd) && (
+                        <div className="flex items-center gap-1">
+                          <Calendar size={9} className="text-amber-400/70 shrink-0" />
+                          <span className="text-[10px] text-amber-400/80">{formatPeriod(r.periodStart, r.periodEnd)}</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               })}
