@@ -676,10 +676,15 @@ function extractCustomerPhone(text: string): string | null {
 interface AISummary {
   paidIn: number;
   paidOut: number;
+  netCashFlow: number;
+  cashFlowRatio: number;
   openingBalance: number | null;
   closingBalance: number | null;
   periodStart: string | null;
   periodEnd: string | null;
+  monthCount: number;
+  averageMonthlyIncome: number;
+  averageDailyIncome: number;
   currency: string;
   customerName: string | null;
   customerPhone: string | null;
@@ -689,33 +694,41 @@ async function extractSummaryWithAI(text: string): Promise<AISummary | null> {
   const openai = getOpenAI();
   if (!openai) return null;
 
-  // Send only the first 6000 chars — the summary is always near the top/bottom
-  const excerpt = text.slice(0, 6000);
+  // Send first + last 3000 chars to capture both summary header and footer
+  const head = text.slice(0, 3000);
+  const tail = text.slice(-3000);
+  const excerpt = head + (text.length > 6000 ? "\n...\n" + tail : "");
 
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    max_tokens: 512,
+    max_tokens: 700,
     temperature: 0,
     messages: [
       {
         role: "system",
         content: `You are a financial data extractor for Safaricom M-Pesa statements.
-Extract ONLY from the statement summary section (not individual transaction rows).
-Return a JSON object with these fields (use null if not found):
-- paidIn: number — total money received / paid in (this is the INCOME figure)
-- paidOut: number — total money sent out / withdrawn / paid out (this is the EXPENDITURE figure)
-- openingBalance: number | null
-- closingBalance: number | null
-- periodStart: string | null — ISO date YYYY-MM-DD
-- periodEnd: string | null — ISO date YYYY-MM-DD
-- currency: string — default "KES"
-- customerName: string | null
-- customerPhone: string | null
+
+Step 1 — Extract EXACTLY from the statement summary section (never from individual transaction rows):
+- paidIn: total "Paid In" / "Money In" / "Total Received" figure (this is TOTAL INCOME)
+- paidOut: total "Withdrawn" / "Paid Out" / "Money Out" / "Total Sent" figure (this is TOTAL EXPENDITURE)
+- openingBalance: opening balance, or null
+- closingBalance: closing balance, or null
+- periodStart: statement period start date as YYYY-MM-DD, or null
+- periodEnd: statement period end date as YYYY-MM-DD, or null
+- currency: currency code, default "KES"
+- customerName: full customer name, or null
+- customerPhone: phone number, or null
+
+Step 2 — Calculate derived values using ONLY the extracted figures above:
+- netCashFlow: paidIn - paidOut  (can be negative)
+- cashFlowRatio: round to 2 decimals — paidIn / paidOut if paidOut > 0, else 2.00
+- monthCount: number of calendar months fully or partially covered by the period (at least 1). If period dates unavailable, estimate from context or use 1.
+- averageMonthlyIncome: paidIn / monthCount  (round to 2 decimals)
+- averageDailyIncome: paidIn / (number of days in period, default 30 if unknown)  (round to 2 decimals)
 
 Rules:
-- Strip commas from numbers (e.g. "12,345.67" → 12345.67)
-- "Paid In" = income. "Withdrawn" / "Paid Out" / "Money Out" = expenditure.
-- Return ONLY valid JSON, no explanation.`,
+- Strip commas from numbers: "12,345.67" → 12345.67
+- Return ONLY valid JSON with all fields — no markdown fences, no explanation.`,
       },
       {
         role: "user",
@@ -725,12 +738,17 @@ Rules:
   });
 
   const raw = response.choices[0]?.message?.content?.trim() ?? "";
-  // Strip markdown code fences if present
   const clean = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
 
   try {
     const parsed = JSON.parse(clean) as AISummary;
     if (typeof parsed.paidIn !== "number" || typeof parsed.paidOut !== "number") return null;
+    // Ensure all derived fields are numbers with sensible defaults
+    parsed.netCashFlow           = typeof parsed.netCashFlow === "number"           ? parsed.netCashFlow           : round2(parsed.paidIn - parsed.paidOut);
+    parsed.cashFlowRatio         = typeof parsed.cashFlowRatio === "number"         ? parsed.cashFlowRatio         : parsed.paidOut > 0 ? round2(parsed.paidIn / parsed.paidOut) : 2.0;
+    parsed.monthCount            = typeof parsed.monthCount === "number" && parsed.monthCount >= 1 ? Math.round(parsed.monthCount) : 1;
+    parsed.averageMonthlyIncome  = typeof parsed.averageMonthlyIncome === "number"  ? parsed.averageMonthlyIncome  : round2(parsed.paidIn / parsed.monthCount);
+    parsed.averageDailyIncome    = typeof parsed.averageDailyIncome === "number"    ? parsed.averageDailyIncome    : round2(parsed.paidIn / (parsed.monthCount * 30));
     return parsed;
   } catch {
     return null;
@@ -767,21 +785,17 @@ router.post("/analyze/mpesa", async (req, res) => {
 
     const { metrics, score, dailyIncome, monthlyIncome } = scored;
 
-    // ── Step 3: Override totals with AI-extracted summary figures ─────────────
-    // The M-Pesa summary section is authoritative — use it when available.
-    // Individual transaction parsing is used only for breakdowns & insights.
-    const totalIncome      = aiSummary?.paidIn  ?? metrics.totalIncome;
-    const totalExpenditure = aiSummary?.paidOut ?? metrics.totalExpenditure;
-    const netCashFlow      = round2(totalIncome - totalExpenditure);
-    const cashFlowRatio    = totalExpenditure === 0
-      ? 2.0
-      : round2(totalIncome / totalExpenditure);
-
-    // Recalculate averages using the AI-sourced income total
-    const monthCount         = metrics.monthCount || 1;
-    const dayCount           = Math.max(daySpan(transactions), 1);
-    const averageMonthlyIncome = round2(totalIncome / monthCount);
-    const averageDailyIncome   = round2(totalIncome / dayCount);
+    // ── Step 3: Use AI-extracted summary figures as the authoritative source ──
+    // paidIn → totalIncome, paidOut → totalExpenditure, all derived values
+    // (netCashFlow, cashFlowRatio, averages) come directly from OpenAI.
+    // Rule-based metrics are used only as fallback when AI is unavailable.
+    const totalIncome          = aiSummary?.paidIn              ?? metrics.totalIncome;
+    const totalExpenditure     = aiSummary?.paidOut             ?? metrics.totalExpenditure;
+    const netCashFlow          = aiSummary?.netCashFlow         ?? round2(totalIncome - totalExpenditure);
+    const cashFlowRatio        = aiSummary?.cashFlowRatio       ?? (totalExpenditure === 0 ? 2.0 : round2(totalIncome / totalExpenditure));
+    const monthCount           = aiSummary?.monthCount          ?? (metrics.monthCount || 1);
+    const averageMonthlyIncome = aiSummary?.averageMonthlyIncome ?? round2(totalIncome / monthCount);
+    const averageDailyIncome   = aiSummary?.averageDailyIncome  ?? round2(totalIncome / Math.max(daySpan(transactions), 1));
 
     // Override credit limit using AI-sourced average monthly income
     const { grade, label, limitMult } = gradeFor(score.finalScore);
