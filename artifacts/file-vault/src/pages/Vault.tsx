@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import {
@@ -7,7 +7,7 @@ import {
   ShieldCheck, BadgeAlert, ThumbsUp, ThumbsDown, Minus,
   ArrowDownLeft, ArrowUpRight, Lightbulb, AlertTriangle, XCircle,
   Banknote, Phone, CreditCard, RefreshCw, ShoppingBag, Building2,
-  LogOut, Menu, X, Globe, Settings,
+  LogOut, Menu, X, Globe, Settings, Smartphone,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -286,6 +286,15 @@ export default function Vault() {
 
   const [analyzing, setAnalyzing] = useState(false);
 
+  const [paymentGate, setPaymentGate] = useState<File | null>(null);
+  const [paymentPhone, setPaymentPhone] = useState('');
+  const [paymentStep, setPaymentStep] = useState<'phone' | 'initiating' | 'waiting' | 'error'>('phone');
+  const [paymentTxRef, setPaymentTxRef] = useState<string | null>(null);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [paymentCountdown, setPaymentCountdown] = useState(90);
+  const paymentGateRef = useRef<File | null>(null);
+  useEffect(() => { paymentGateRef.current = paymentGate; }, [paymentGate]);
+
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deletePassword, setDeletePassword] = useState('');
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -498,11 +507,8 @@ export default function Vault() {
     }
   };
 
-  const handleFileAdd = useCallback((file: File) => {
-    if (file.type !== 'application/pdf') {
-      toast({ title: 'Invalid file', description: 'Please upload a PDF.', variant: 'destructive' });
-      return;
-    }
+  const proceedAfterPayment = (file: File) => {
+    setPaymentGate(null);
     const reader = new FileReader();
     reader.onload = () => {
       const base64 = (reader.result as string).split(',')[1];
@@ -514,6 +520,70 @@ export default function Vault() {
       analyzeAndSave(base64, file.name, file.size);
     };
     reader.readAsDataURL(file);
+  };
+
+  const initiatePayment = async () => {
+    setPaymentStep('initiating');
+    setPaymentError(null);
+    try {
+      const res = await fetch('/api/payment/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: paymentPhone }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || data.error || 'Payment initiation failed');
+      setPaymentTxRef(data.data?.transaction_reference ?? null);
+      setPaymentStep('waiting');
+      setPaymentCountdown(90);
+    } catch (e: any) {
+      setPaymentError(e.message || 'Failed to initiate payment');
+      setPaymentStep('error');
+    }
+  };
+
+  useEffect(() => {
+    if (paymentStep !== 'waiting') return;
+    const id = setInterval(() => {
+      setPaymentCountdown(c => {
+        if (c <= 1) {
+          setPaymentStep('error');
+          setPaymentError('Payment timed out. Please try again.');
+          return 0;
+        }
+        return c - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [paymentStep]);
+
+  useEffect(() => {
+    if (paymentStep !== 'waiting' || !paymentTxRef) return;
+    const id = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/payment/status/${paymentTxRef}`);
+        const data = await res.json();
+        if (data.success && data.data?.status === 'completed') {
+          clearInterval(id);
+          const file = paymentGateRef.current;
+          if (file) { paymentGateRef.current = null; proceedAfterPayment(file); }
+        }
+      } catch {}
+    }, 5000);
+    return () => clearInterval(id);
+  }, [paymentStep, paymentTxRef]);
+
+  const handleFileAdd = useCallback((file: File) => {
+    if (file.type !== 'application/pdf') {
+      toast({ title: 'Invalid file', description: 'Please upload a PDF.', variant: 'destructive' });
+      return;
+    }
+    setPaymentGate(file);
+    setPaymentPhone('');
+    setPaymentStep('phone');
+    setPaymentTxRef(null);
+    setPaymentError(null);
+    setPaymentCountdown(90);
   }, [toast]);
 
   const handlePaste = useCallback((e: ClipboardEvent) => {
@@ -951,6 +1021,129 @@ export default function Vault() {
                 <><Trash2 size={12} />Delete My Account</>
               )}
             </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ── M-Pesa Payment Gate ─────────────────────────────────────────── */}
+    {paymentGate && (
+      <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+
+          {/* Header */}
+          <div className="bg-gradient-to-br from-green-900/40 to-emerald-900/20 border-b border-border p-5 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-green-500/20 border border-green-500/30 flex items-center justify-center shrink-0">
+              <Smartphone size={20} className="text-green-400" />
+            </div>
+            <div>
+              <p className="font-semibold text-sm text-foreground">M-Pesa Payment</p>
+              <p className="text-xs text-muted-foreground">KSh 50 per statement analysis</p>
+            </div>
+            <button
+              onClick={() => setPaymentGate(null)}
+              className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
+              aria-label="Close"
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          <div className="p-5 space-y-4">
+            {/* Step: enter phone */}
+            {(paymentStep === 'phone' || paymentStep === 'initiating') && (
+              <>
+                <div>
+                  <p className="text-sm text-muted-foreground mb-3 leading-relaxed">
+                    Enter your Safaricom number to receive an M-Pesa STK push for{' '}
+                    <span className="font-semibold text-foreground">KSh 50</span>.
+                  </p>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-medium">+254</span>
+                    <Input
+                      type="tel"
+                      placeholder="7XX XXX XXX"
+                      value={paymentPhone}
+                      onChange={e => setPaymentPhone(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && paymentPhone.trim() && paymentStep === 'phone') initiatePayment(); }}
+                      className="pl-12 text-sm"
+                      disabled={paymentStep === 'initiating'}
+                      autoFocus
+                    />
+                  </div>
+                </div>
+                <Button
+                  className="w-full bg-green-600 hover:bg-green-500 text-white font-semibold gap-2"
+                  onClick={initiatePayment}
+                  disabled={!paymentPhone.trim() || paymentStep === 'initiating'}
+                >
+                  {paymentStep === 'initiating' ? (
+                    <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Sending STK Push…</>
+                  ) : (
+                    <>Pay KSh 50 via M-Pesa</>
+                  )}
+                </Button>
+                <p className="text-[11px] text-muted-foreground text-center">
+                  Your phone will vibrate with a payment prompt.
+                </p>
+              </>
+            )}
+
+            {/* Step: waiting for payment */}
+            {paymentStep === 'waiting' && (
+              <>
+                <div className="text-center py-2 space-y-3">
+                  <div className="w-14 h-14 rounded-full bg-green-500/15 border border-green-500/30 flex items-center justify-center mx-auto">
+                    <span className="w-6 h-6 border-3 border-green-500/30 border-t-green-400 rounded-full animate-spin" style={{ borderWidth: 3 }} />
+                  </div>
+                  <div>
+                    <p className="font-semibold text-sm text-foreground">Check your phone</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Enter your M-Pesa PIN to pay <span className="font-semibold text-foreground">KSh 50</span>
+                    </p>
+                  </div>
+                  <div className="bg-muted/30 rounded-lg px-3 py-2 inline-block">
+                    <p className="text-xs text-muted-foreground">
+                      Expires in <span className="font-mono font-semibold text-foreground">
+                        {Math.floor(paymentCountdown / 60)}:{String(paymentCountdown % 60).padStart(2, '0')}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+                <p className="text-[11px] text-muted-foreground text-center">
+                  We'll detect your payment automatically. This may take a few seconds after you pay.
+                </p>
+                <button
+                  onClick={() => setPaymentGate(null)}
+                  className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-1"
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+
+            {/* Step: error */}
+            {paymentStep === 'error' && (
+              <>
+                <div className="flex items-start gap-3 bg-destructive/10 border border-destructive/20 rounded-lg p-3">
+                  <AlertCircle size={16} className="text-destructive shrink-0 mt-0.5" />
+                  <p className="text-sm text-destructive leading-snug">{paymentError || 'Payment failed. Please try again.'}</p>
+                </div>
+                <Button
+                  className="w-full gap-2"
+                  variant="outline"
+                  onClick={() => { setPaymentStep('phone'); setPaymentError(null); }}
+                >
+                  <RefreshCw size={14} /> Try Again
+                </Button>
+                <button
+                  onClick={() => setPaymentGate(null)}
+                  className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-1"
+                >
+                  Cancel
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>

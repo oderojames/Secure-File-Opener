@@ -83,3 +83,7 @@ externalPort = 3000
 
 [userenv.shared]
 VITE_FIREBASE_API_KEY = "AIzaSyA6ASV5Prc1-Te7D7QuI1caXbLT7r-4S_U"
+PAYNECTA_API_KEY = "hmp_w8ouZ18h9EAwCbRQHIAWfjoa7h8ix0zZ3L3XpUQW"
+PAYNECTA_USER_EMAIL = "jamesodero40@gmail.com"
+PAYNECTA_PAYMENT_CODE = "PNT_619044"
+PAYNECTA_BASE_URL = "https://paynecta.co.ke/api/v1"
