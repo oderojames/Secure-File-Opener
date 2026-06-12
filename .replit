@@ -78,3 +78,8 @@ externalPort = 3003
 [[ports]]
 localPort = 19387
 externalPort = 3000
+
+[userenv]
+
+[userenv.shared]
+VITE_FIREBASE_API_KEY = "AIzaSyA6ASV5Prc1-Te7D7QuI1caXbLT7r-4S_U"

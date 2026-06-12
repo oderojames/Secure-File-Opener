@@ -1,12 +1,15 @@
 import { Router } from "express";
 import OpenAI from "openai";
 
-const apiKey = process.env["OPENAI_API_KEYS"] ?? process.env["OPENAI_API_KEY"] ?? "";
-const isOpenRouter = apiKey.startsWith("sk-or-");
-const openai = new OpenAI({
-  apiKey,
-  ...(isOpenRouter ? { baseURL: "https://openrouter.ai/api/v1" } : {}),
-});
+function getOpenAI(): OpenAI | null {
+  const apiKey = process.env["OPENAI_API_KEYS"] ?? process.env["OPENAI_API_KEY"] ?? "";
+  if (!apiKey) return null;
+  const isOpenRouter = apiKey.startsWith("sk-or-");
+  return new OpenAI({
+    apiKey,
+    ...(isOpenRouter ? { baseURL: "https://openrouter.ai/api/v1" } : {}),
+  });
+}
 
 const router = Router();
 
@@ -683,7 +686,8 @@ interface AISummary {
 }
 
 async function extractSummaryWithAI(text: string): Promise<AISummary | null> {
-  if (!process.env["OPENAI_API_KEYS"] && !process.env["OPENAI_API_KEY"]) return null;
+  const openai = getOpenAI();
+  if (!openai) return null;
 
   // Send only the first 6000 chars — the summary is always near the top/bottom
   const excerpt = text.slice(0, 6000);
