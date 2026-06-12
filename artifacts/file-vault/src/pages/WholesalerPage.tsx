@@ -2,11 +2,72 @@ import { useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/contexts/AuthContext';
 import WholesalerAuthPage from '@/pages/WholesalerAuthPage';
-import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock, Calendar } from 'lucide-react';
+import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock, Calendar, Mail, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { collection, getDocs, query, orderBy } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+
+function EmailVerificationBanner() {
+  const { user, signOut, sendVerificationEmail, reloadUser } = useAuth();
+  const [, navigate] = useLocation();
+  const [resendStatus, setResendStatus] = useState<'idle' | 'sending' | 'sent'>('idle');
+  const [checkStatus, setCheckStatus] = useState<'idle' | 'checking' | 'not-yet'>('idle');
+
+  const handleResend = async () => {
+    setResendStatus('sending');
+    try { await sendVerificationEmail(); setResendStatus('sent'); setTimeout(() => setResendStatus('idle'), 4000); }
+    catch { setResendStatus('idle'); }
+  };
+
+  const handleContinue = async () => {
+    setCheckStatus('checking');
+    const ok = await reloadUser();
+    if (!ok) { setCheckStatus('not-yet'); setTimeout(() => setCheckStatus('idle'), 3000); }
+  };
+
+  return (
+    <div className="min-h-screen w-full bg-background flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-[linear-gradient(hsl(220_15%_10%/0.8)_1px,transparent_1px),linear-gradient(90deg,hsl(220_15%_10%/0.8)_1px,transparent_1px)] bg-[size:40px_40px] opacity-40 pointer-events-none" />
+      <div className="relative w-full max-w-md">
+        <div className="bg-card border border-border rounded-2xl p-8 shadow-2xl text-center space-y-5">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-500/20 border border-amber-500/30 mx-auto">
+            <Mail size={30} className="text-amber-400" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-foreground">Verify your email</h2>
+            <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
+              We sent a verification link to <span className="font-semibold text-foreground">{user?.email}</span>.
+              <br />Open it to activate your account, then click <em>Continue</em>.
+            </p>
+          </div>
+          <div className="space-y-2 pt-1">
+            <button onClick={handleContinue} disabled={checkStatus === 'checking'}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-black font-semibold py-2.5 px-4 transition-colors text-sm disabled:opacity-60">
+              {checkStatus === 'checking'
+                ? <><RefreshCw size={14} className="animate-spin" /> Checking…</>
+                : <><CheckCircle2 size={14} /> I've verified — Continue</>}
+            </button>
+            {checkStatus === 'not-yet' && (
+              <div className="flex items-center gap-2 text-amber-400 text-xs bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 justify-center">
+                <AlertCircle size={13} />
+                Email not verified yet. Please click the link in your inbox first.
+              </div>
+            )}
+            <button onClick={handleResend} disabled={resendStatus !== 'idle'}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-border hover:bg-muted text-foreground font-medium py-2.5 px-4 transition-colors text-sm disabled:opacity-60">
+              {resendStatus === 'sending' ? 'Sending…' : resendStatus === 'sent' ? '✓ Email resent!' : 'Resend verification email'}
+            </button>
+            <button onClick={async () => { await signOut(); navigate('/'); }}
+              className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-1">
+              Sign out
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface ReportSummary {
   id: string;
@@ -470,6 +531,8 @@ export default function WholesalerPage() {
   }
 
   if (!user) return <WholesalerAuthPage />;
+
+  if (!user.emailVerified) return <EmailVerificationBanner />;
 
   if (user.role === 'retailer') {
     return (

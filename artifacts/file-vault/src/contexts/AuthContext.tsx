@@ -8,9 +8,11 @@ import {
   signOut as firebaseSignOut,
   updateProfile,
   sendPasswordResetEmail,
+  sendEmailVerification,
   EmailAuthProvider,
   reauthenticateWithCredential,
   deleteUser,
+  reload,
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, deleteDoc, collection, getDocs, query, where, writeBatch } from 'firebase/firestore';
 import { auth, googleProvider, db } from '@/lib/firebase';
@@ -28,6 +30,8 @@ interface AuthContextValue {
   signOut: () => Promise<void>;
   sendPasswordReset: (email: string) => Promise<void>;
   deleteAccount: (password: string) => Promise<void>;
+  sendVerificationEmail: () => Promise<void>;
+  reloadUser: () => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -104,6 +108,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     await updateProfile(cred.user, { displayName: name });
     await ensureUserDoc(cred.user, role);
+    await sendEmailVerification(cred.user).catch(() => {});
+  };
+
+  const sendVerificationEmail = async () => {
+    if (auth.currentUser) {
+      await sendEmailVerification(auth.currentUser);
+    }
+  };
+
+  const reloadUser = async (): Promise<boolean> => {
+    if (!auth.currentUser) return false;
+    await reload(auth.currentUser);
+    if (auth.currentUser.emailVerified) {
+      const snap = await getDoc(doc(db, 'users', auth.currentUser.uid)).catch(() => null);
+      const role = (snap?.data()?.role as 'retailer' | 'wholesaler') ?? 'retailer';
+      setUser(Object.assign(auth.currentUser, { role }));
+      return true;
+    }
+    return false;
   };
 
   const signInWithGoogle = async (role: 'retailer' | 'wholesaler' = 'retailer') => {
@@ -150,7 +173,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signInWithEmail, signUpWithEmail, signInWithGoogle, signOut, sendPasswordReset, deleteAccount }}>
+    <AuthContext.Provider value={{ user, loading, signInWithEmail, signUpWithEmail, signInWithGoogle, signOut, sendPasswordReset, deleteAccount, sendVerificationEmail, reloadUser }}>
       {children}
     </AuthContext.Provider>
   );
