@@ -5,7 +5,7 @@ import WholesalerAuthPage from '@/pages/WholesalerAuthPage';
 import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock, Calendar, Mail, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { collection, getDocs, query, orderBy } from 'firebase/firestore';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
 function EmailVerificationBanner() {
@@ -122,16 +122,36 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
     try {
       setLoading(true);
       setError(null);
-      const snap = await getDocs(
-        query(collection(db, 'retailer_reports'), orderBy('dateAdded', 'desc'))
-      );
-      const all = snap.docs.map(d => d.data() as ReportSummary);
-      // Show: public reports (or old ones with no visibility field), OR private ones explicitly shared with this wholesaler
-      const visible = all.filter(r =>
-        !r.visibility || r.visibility === 'public' ||
-        (r.visibility === 'private' && r.allowedWholesalers?.includes(wholesalerUid))
-      );
-      setReports(visible);
+
+      // Two server-side queries: only fetch what this wholesaler is allowed to see.
+      // Private reports for other wholesalers never leave Firestore.
+      const [publicSnap, sharedSnap] = await Promise.all([
+        getDocs(query(
+          collection(db, 'retailer_reports'),
+          where('visibility', '==', 'public'),
+        )),
+        getDocs(query(
+          collection(db, 'retailer_reports'),
+          where('allowedWholesalers', 'array-contains', wholesalerUid),
+        )),
+      ]);
+
+      // Merge and deduplicate by Firestore document ID
+      const seen = new Set<string>();
+      const combined: ReportSummary[] = [];
+      for (const snap of [publicSnap, sharedSnap]) {
+        for (const d of snap.docs) {
+          if (!seen.has(d.id)) {
+            seen.add(d.id);
+            combined.push(d.data() as ReportSummary);
+          }
+        }
+      }
+
+      // Sort by dateAdded descending (ISO strings sort lexicographically)
+      combined.sort((a, b) => (a.dateAdded < b.dateAdded ? 1 : a.dateAdded > b.dateAdded ? -1 : 0));
+
+      setReports(combined);
     } catch (e: any) {
       setError(e.message || 'Failed to load reports');
     } finally {
