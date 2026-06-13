@@ -25,7 +25,7 @@ function formatPhone(raw: string): string {
 }
 
 router.post("/payment/initiate", async (req: Request, res: Response) => {
-  const { phone } = req.body as { phone?: string };
+  const { phone, amount } = req.body as { phone?: string; amount?: number };
   if (!phone) {
     res.status(400).json({ success: false, error: "Phone number is required" });
     return;
@@ -37,6 +37,8 @@ router.post("/payment/initiate", async (req: Request, res: Response) => {
     return;
   }
 
+  const chargeAmount = typeof amount === "number" && amount > 0 ? amount : 50;
+
   try {
     const response = await fetch(`${BASE_URL()}/payment/initialize`, {
       method: "POST",
@@ -44,7 +46,7 @@ router.post("/payment/initiate", async (req: Request, res: Response) => {
       body: JSON.stringify({
         code: PAYMENT_CODE(),
         mobile_number: formatted,
-        amount: 50,
+        amount: chargeAmount,
       }),
     });
     const data = await response.json();

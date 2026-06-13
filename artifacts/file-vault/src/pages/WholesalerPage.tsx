@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/contexts/AuthContext';
 import WholesalerAuthPage from '@/pages/WholesalerAuthPage';
-import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock, Calendar, Mail, CheckCircle2 } from 'lucide-react';
+import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock, Calendar, Mail, CheckCircle2, Smartphone, CreditCard, ChevronRight, X, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs, query, where, doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
 function EmailVerificationBanner() {
@@ -104,12 +104,32 @@ function formatPeriod(start?: string | null, end?: string | null) {
   return `${fmt(start)} – ${fmt(end)}`;
 }
 
+const FREE_QUOTA = 3;
+const PAYMENT_TIERS = [
+  { slots: 10,  amount: 100, label: '10 more retailers',  badge: 'Popular' },
+  { slots: 20,  amount: 200, label: '20 more retailers',  badge: '' },
+  { slots: 30,  amount: 300, label: '30 more retailers',  badge: '' },
+  { slots: 50,  amount: 500, label: '50+ more retailers', badge: 'Best Value' },
+];
+
 function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
-  const [reports, setReports] = useState<ReportSummary[]>([]);
-  const [loading, setLoading]   = useState(true);
-  const [error, setError]       = useState<string | null>(null);
-  const [search, setSearch]     = useState('');
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [reports, setReports]     = useState<ReportSummary[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState<string | null>(null);
+  const [search, setSearch]       = useState('');
+  const [copiedId, setCopiedId]   = useState<string | null>(null);
+
+  const [quota, setQuota]         = useState(FREE_QUOTA);
+  const [quotaLoading, setQuotaLoading] = useState(true);
+
+  const [paymentOpen, setPaymentOpen]   = useState(false);
+  const [selectedTier, setSelectedTier] = useState<typeof PAYMENT_TIERS[0] | null>(null);
+  const [paymentPhone, setPaymentPhone] = useState('');
+  const [paymentStep, setPaymentStep]   = useState<'tiers' | 'phone' | 'initiating' | 'waiting' | 'success' | 'error'>('tiers');
+  const [paymentTxRef, setPaymentTxRef] = useState<string | null>(null);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [paymentCountdown, setPaymentCountdown] = useState(90);
+  const pendingTierRef = useRef<typeof PAYMENT_TIERS[0] | null>(null);
 
   const copyEmail = (id: string, email: string) => {
     navigator.clipboard.writeText(email).then(() => {
@@ -118,39 +138,33 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
     });
   };
 
+  useEffect(() => {
+    const loadQuota = async () => {
+      try {
+        const snap = await getDoc(doc(db, 'wholesaler_quotas', wholesalerUid));
+        if (snap.exists()) setQuota(snap.data().quota ?? FREE_QUOTA);
+      } catch {}
+      setQuotaLoading(false);
+    };
+    loadQuota();
+  }, [wholesalerUid]);
+
   const fetchReports = async () => {
     try {
       setLoading(true);
       setError(null);
-
-      // Two server-side queries: only fetch what this wholesaler is allowed to see.
-      // Private reports for other wholesalers never leave Firestore.
       const [publicSnap, sharedSnap] = await Promise.all([
-        getDocs(query(
-          collection(db, 'retailer_reports'),
-          where('visibility', '==', 'public'),
-        )),
-        getDocs(query(
-          collection(db, 'retailer_reports'),
-          where('allowedWholesalers', 'array-contains', wholesalerUid),
-        )),
+        getDocs(query(collection(db, 'retailer_reports'), where('visibility', '==', 'public'))),
+        getDocs(query(collection(db, 'retailer_reports'), where('allowedWholesalers', 'array-contains', wholesalerUid))),
       ]);
-
-      // Merge and deduplicate by Firestore document ID
       const seen = new Set<string>();
       const combined: ReportSummary[] = [];
       for (const snap of [publicSnap, sharedSnap]) {
         for (const d of snap.docs) {
-          if (!seen.has(d.id)) {
-            seen.add(d.id);
-            combined.push(d.data() as ReportSummary);
-          }
+          if (!seen.has(d.id)) { seen.add(d.id); combined.push(d.data() as ReportSummary); }
         }
       }
-
-      // Sort by dateAdded descending (ISO strings sort lexicographically)
       combined.sort((a, b) => (a.dateAdded < b.dateAdded ? 1 : a.dateAdded > b.dateAdded ? -1 : 0));
-
       setReports(combined);
     } catch (e: any) {
       setError(e.message || 'Failed to load reports');
@@ -158,19 +172,85 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
       setLoading(false);
     }
   };
-
   useEffect(() => { fetchReports(); }, [wholesalerUid]);
 
-  const filtered = reports.filter(r => {
-    const q = search.toLowerCase();
-    return (
-      r.customerName?.toLowerCase().includes(q) ||
-      r.retailerName?.toLowerCase().includes(q) ||
-      r.retailerEmail?.toLowerCase().includes(q)
-    );
-  });
+  useEffect(() => {
+    if (paymentStep !== 'waiting') return;
+    const id = setInterval(() => {
+      setPaymentCountdown(c => {
+        if (c <= 1) { setPaymentStep('error'); setPaymentError('Payment timed out. Please try again.'); return 0; }
+        return c - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [paymentStep]);
 
-  if (loading) {
+  useEffect(() => {
+    if (paymentStep !== 'waiting' || !paymentTxRef) return;
+    const id = setInterval(async () => {
+      try {
+        const res  = await fetch(`/api/payment/status/${paymentTxRef}`);
+        const data = await res.json();
+        if (data.success && data.data?.status === 'completed') {
+          clearInterval(id);
+          const tier = pendingTierRef.current;
+          if (tier) {
+            setQuota(prev => {
+              const newQ = prev + tier.slots;
+              setDoc(doc(db, 'wholesaler_quotas', wholesalerUid), { quota: newQ }, { merge: true }).catch(() => {});
+              return newQ;
+            });
+          }
+          setPaymentStep('success');
+        }
+      } catch {}
+    }, 5000);
+    return () => clearInterval(id);
+  }, [paymentStep, paymentTxRef, wholesalerUid]);
+
+  const openPayment = () => {
+    setPaymentOpen(true);
+    setPaymentStep('tiers');
+    setSelectedTier(null);
+    setPaymentPhone('');
+    setPaymentTxRef(null);
+    setPaymentError(null);
+    setPaymentCountdown(90);
+  };
+
+  const initiatePayment = async () => {
+    if (!selectedTier) return;
+    setPaymentStep('initiating');
+    setPaymentError(null);
+    pendingTierRef.current = selectedTier;
+    try {
+      const res  = await fetch('/api/payment/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: paymentPhone, amount: selectedTier.amount }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || data.error || 'Payment initiation failed');
+      setPaymentTxRef(data.data?.transaction_reference ?? null);
+      setPaymentStep('waiting');
+      setPaymentCountdown(90);
+    } catch (e: any) {
+      setPaymentError(e.message || 'Failed to initiate payment');
+      setPaymentStep('error');
+    }
+  };
+
+  const isSearching   = search.trim().length > 0;
+  const searchResults = isSearching
+    ? reports.filter(r => {
+        const q = search.toLowerCase();
+        return r.retailerName?.toLowerCase().includes(q) || r.customerName?.toLowerCase().includes(q);
+      })
+    : [];
+  const visibleReports = reports.slice(0, quota);
+  const lockedCount    = Math.max(0, reports.length - quota);
+
+  if (loading || quotaLoading) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-4">
         <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin" />
@@ -184,218 +264,391 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
       <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6">
         <AlertCircle size={40} className="text-destructive" />
         <p className="text-sm text-muted-foreground text-center max-w-sm">{error}</p>
-        <Button variant="outline" size="sm" onClick={fetchReports}>
-          <RefreshCw size={14} className="mr-2" /> Retry
-        </Button>
+        <Button variant="outline" size="sm" onClick={fetchReports}><RefreshCw size={14} className="mr-2" /> Retry</Button>
       </div>
     );
   }
 
   return (
+    <>
     <div className="flex-1 flex flex-col overflow-hidden">
 
-      {/* Search + refresh */}
-      <div className="px-4 sm:px-6 py-4 flex items-center gap-3">
-        <div className="relative flex-1">
+      {/* Quota bar */}
+      <div className="px-4 sm:px-6 pt-4 pb-2 flex items-center gap-3">
+        <div className="flex-1 text-xs text-muted-foreground">
+          Showing <span className="font-semibold text-foreground">{Math.min(quota, reports.length)}</span> of{' '}
+          <span className="font-semibold text-foreground">{reports.length}</span> retailers · Slot limit:{' '}
+          <span className="font-semibold text-amber-400">{quota}</span>
+        </div>
+        <button
+          onClick={openPayment}
+          className="flex items-center gap-1.5 text-xs font-semibold text-amber-400 hover:text-amber-300 transition-colors bg-amber-500/10 border border-amber-500/25 rounded-lg px-3 py-1.5"
+        >
+          <CreditCard size={12} /> Upgrade Slots
+        </button>
+        <Button variant="outline" size="sm" onClick={fetchReports} className="gap-2 shrink-0">
+          <RefreshCw size={13} />
+        </Button>
+      </div>
+
+      {/* Search bar */}
+      <div className="px-4 sm:px-6 py-2">
+        <div className="relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search by name or email…"
+            placeholder="Search retailers by business name…"
             value={search}
             onChange={e => setSearch(e.target.value)}
             className="pl-9 bg-card"
           />
         </div>
-        <Button variant="outline" size="sm" onClick={fetchReports} className="gap-2 shrink-0">
-          <RefreshCw size={13} /> <span className="hidden sm:inline">Refresh</span>
-        </Button>
       </div>
 
-      {/* Count */}
-      <div className="px-4 sm:px-6 pb-3">
-        <p className="text-xs text-muted-foreground">
-          {filtered.length} {filtered.length === 1 ? 'report' : 'reports'} found
-        </p>
-      </div>
+      <div className="flex-1 overflow-auto px-4 sm:px-6 pb-6 pt-2">
 
-      {/* Table */}
-      <div className="flex-1 overflow-auto px-4 sm:px-6 pb-6">
-        {filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground">
-            <Users size={36} className="opacity-20" />
-            <p className="text-sm">
-              {search ? 'No results match your search.' : 'No retailer reports yet.'}
-            </p>
-            {!search && (
-              <p className="text-xs opacity-60 text-center">Reports appear here once retailers submit M-Pesa statements.</p>
-            )}
-          </div>
-        ) : (
+        {/* ── SEARCH MODE: only business names + Manage button ── */}
+        {isSearching && (
           <>
-            {/* ── Mobile card list (< sm) ── */}
-            <div className="sm:hidden space-y-3">
-              {filtered.map((r, i) => {
-                const s = scoreStyle(r.score);
-                return (
-                  <div key={r.id + i} className="bg-card border border-border rounded-xl p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      {/* Left: name + details */}
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <p className="font-semibold text-sm text-foreground truncate">
-                          {r.customerName || r.retailerName || '—'}
-                        </p>
-                        {r.customerName && r.retailerName && (
-                          <p className="text-[11px] text-muted-foreground truncate">
-                            <span className="text-muted-foreground/60">Business:</span> {r.retailerName}
-                          </p>
-                        )}
-                        {r.customerPhone && (
-                          <p className="text-[11px] text-amber-400/80 truncate">
-                            <span className="text-muted-foreground/60">
-                              {r.customerName ? 'Owner:' : 'Contact:'}
-                            </span>{' '}
-                            {r.customerPhone}
-                          </p>
-                        )}
-                        {r.retailerEmail && (
-                          <div className="flex items-center gap-1">
-                            <p className="text-[11px] text-muted-foreground truncate">{r.retailerEmail}</p>
-                            <button
-                              onClick={() => copyEmail(r.id, r.retailerEmail)}
-                              title="Copy email"
-                              className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground"
-                            >
-                              {copiedId === r.id
-                                ? <Check size={11} className="text-green-400" />
-                                : <Copy size={11} />}
-                            </button>
-                          </div>
-                        )}
-                        <p className="text-[10px] text-muted-foreground pt-0.5">{formatDate(r.dateAdded)}</p>
-                        {formatPeriod(r.periodStart, r.periodEnd) && (
-                          <div className="flex items-center gap-1 pt-0.5">
-                            <Calendar size={9} className="text-amber-400/70 shrink-0" />
-                            <p className="text-[10px] text-amber-400/80">{formatPeriod(r.periodStart, r.periodEnd)}</p>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Right: score gauge */}
-                      <div className="flex flex-col items-center gap-1 shrink-0">
-                        <div className="relative w-10 h-10">
-                          <svg width="40" height="40" viewBox="0 0 40 40">
-                            <circle cx="20" cy="20" r="16" fill="none" stroke="hsl(220 15% 18%)" strokeWidth="4" />
-                            <circle
-                              cx="20" cy="20" r="16" fill="none"
-                              stroke={s.bar} strokeWidth="4"
-                              strokeDasharray={`${(r.score / 100) * (2 * Math.PI * 16)} ${2 * Math.PI * 16}`}
-                              strokeLinecap="round"
-                              transform="rotate(-90 20 20)"
-                            />
-                            <text x="20" y="24" textAnchor="middle" fill="white" fontSize="9" fontWeight="800">{r.score}</text>
-                          </svg>
-                        </div>
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${s.text} ${s.bg} ${s.border}`}>
-                          {r.grade}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* ── Desktop table (≥ sm) ── */}
-            <div className="hidden sm:block bg-card border border-border rounded-xl overflow-hidden">
-              {/* Header */}
-              <div className="grid grid-cols-[1fr_160px_100px] border-b border-border bg-muted/40 px-5 py-3">
-                <span className="text-xs font-semibold text-muted-foreground">Retailer</span>
-                <span className="text-xs font-semibold text-muted-foreground">Credit Score</span>
-                <span className="text-xs font-semibold text-muted-foreground">Date</span>
+            {searchResults.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground">
+                <Search size={32} className="opacity-20" />
+                <p className="text-sm">No retailers match your search.</p>
               </div>
-
-              {/* Rows */}
-              {filtered.map((r, i) => {
-                const s = scoreStyle(r.score);
-                return (
-                  <div
-                    key={r.id + i}
-                    className="grid grid-cols-[1fr_160px_100px] items-center px-5 py-4 border-b border-border last:border-0 hover:bg-muted/20 transition-colors"
-                  >
-                    {/* Customer / retailer name */}
-                    <div className="min-w-0 pr-4 space-y-0.5">
-                      <p className="font-semibold text-sm text-foreground truncate">
-                        {r.customerName || r.retailerName || '—'}
-                      </p>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground pb-1">
+                  {searchResults.length} retailer{searchResults.length !== 1 ? 's' : ''} found · Click <span className="text-amber-400 font-semibold">Manage</span> to unlock more slots
+                </p>
+                {searchResults.map((r, i) => (
+                  <div key={r.id + i} className="flex items-center justify-between gap-3 bg-card border border-border rounded-xl px-4 py-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-sm text-foreground truncate">{r.retailerName || r.customerName || '—'}</p>
                       {r.customerName && r.retailerName && (
-                        <p className="text-[11px] text-muted-foreground truncate">
-                          <span className="text-muted-foreground/60">Business:</span> {r.retailerName}
-                        </p>
-                      )}
-                      {r.customerPhone && (
-                        <p className="text-[11px] text-amber-400/80 truncate">
-                          <span className="text-muted-foreground/60">
-                            {r.customerName ? 'Contact Owner:' : 'Contact Business:'}
-                          </span>{' '}
-                          {r.customerPhone}
-                        </p>
-                      )}
-                      {r.retailerEmail ? (
-                        <div className="flex items-center gap-1 group">
-                          <p className="text-[11px] text-muted-foreground truncate">{r.retailerEmail}</p>
-                          <button
-                            onClick={() => copyEmail(r.id, r.retailerEmail)}
-                            title="Copy email"
-                            className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                          >
-                            {copiedId === r.id
-                              ? <Check size={11} className="text-green-400" />
-                              : <Copy size={11} />}
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-
-                    {/* Credit score */}
-                    <div className="flex items-center gap-3">
-                      <div className="relative w-10 h-10 shrink-0">
-                        <svg width="40" height="40" viewBox="0 0 40 40">
-                          <circle cx="20" cy="20" r="16" fill="none" stroke="hsl(220 15% 18%)" strokeWidth="4" />
-                          <circle
-                            cx="20" cy="20" r="16" fill="none"
-                            stroke={s.bar} strokeWidth="4"
-                            strokeDasharray={`${(r.score / 100) * (2 * Math.PI * 16)} ${2 * Math.PI * 16}`}
-                            strokeLinecap="round"
-                            transform="rotate(-90 20 20)"
-                          />
-                          <text x="20" y="24" textAnchor="middle" fill="white" fontSize="9" fontWeight="800">{r.score}</text>
-                        </svg>
-                      </div>
-                      <div>
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold border ${s.text} ${s.bg} ${s.border}`}>
-                          {r.grade}
-                        </span>
-                        <p className={`text-[10px] mt-0.5 ${s.text}`}>{r.label}</p>
-                      </div>
-                    </div>
-
-                    {/* Date + Period */}
-                    <div className="space-y-0.5">
-                      <span className="text-xs text-muted-foreground">{formatDate(r.dateAdded)}</span>
-                      {formatPeriod(r.periodStart, r.periodEnd) && (
-                        <div className="flex items-center gap-1">
-                          <Calendar size={9} className="text-amber-400/70 shrink-0" />
-                          <span className="text-[10px] text-amber-400/80">{formatPeriod(r.periodStart, r.periodEnd)}</span>
-                        </div>
+                        <p className="text-xs text-muted-foreground truncate">{r.customerName}</p>
                       )}
                     </div>
+                    <button
+                      onClick={openPayment}
+                      className="shrink-0 flex items-center gap-1.5 text-xs font-semibold text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 rounded-lg px-3 py-1.5 transition-colors"
+                    >
+                      Manage <ChevronRight size={12} />
+                    </button>
                   </div>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ── DASHBOARD MODE: full credit reports up to quota ── */}
+        {!isSearching && (
+          <>
+            {reports.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground">
+                <Users size={36} className="opacity-20" />
+                <p className="text-sm">No retailer reports yet.</p>
+                <p className="text-xs opacity-60 text-center">Reports appear here once retailers submit M-Pesa statements.</p>
+              </div>
+            ) : (
+              <>
+                {/* ── Mobile cards ── */}
+                <div className="sm:hidden space-y-3">
+                  {visibleReports.map((r, i) => {
+                    const s = scoreStyle(r.score);
+                    return (
+                      <div key={r.id + i} className="bg-card border border-border rounded-xl p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <p className="font-semibold text-sm text-foreground truncate">{r.customerName || r.retailerName || '—'}</p>
+                            {r.customerName && r.retailerName && (
+                              <p className="text-[11px] text-muted-foreground truncate"><span className="text-muted-foreground/60">Business:</span> {r.retailerName}</p>
+                            )}
+                            {r.customerPhone && (
+                              <p className="text-[11px] text-amber-400/80 truncate"><span className="text-muted-foreground/60">{r.customerName ? 'Owner:' : 'Contact:'}</span> {r.customerPhone}</p>
+                            )}
+                            {r.retailerEmail && (
+                              <div className="flex items-center gap-1">
+                                <p className="text-[11px] text-muted-foreground truncate">{r.retailerEmail}</p>
+                                <button onClick={() => copyEmail(r.id, r.retailerEmail)} className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground">
+                                  {copiedId === r.id ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
+                                </button>
+                              </div>
+                            )}
+                            <p className="text-[10px] text-muted-foreground pt-0.5">{formatDate(r.dateAdded)}</p>
+                            {formatPeriod(r.periodStart, r.periodEnd) && (
+                              <div className="flex items-center gap-1 pt-0.5">
+                                <Calendar size={9} className="text-amber-400/70 shrink-0" />
+                                <p className="text-[10px] text-amber-400/80">{formatPeriod(r.periodStart, r.periodEnd)}</p>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex flex-col items-center gap-1 shrink-0">
+                            <div className="relative w-10 h-10">
+                              <svg width="40" height="40" viewBox="0 0 40 40">
+                                <circle cx="20" cy="20" r="16" fill="none" stroke="hsl(220 15% 18%)" strokeWidth="4" />
+                                <circle cx="20" cy="20" r="16" fill="none" stroke={s.bar} strokeWidth="4"
+                                  strokeDasharray={`${(r.score / 100) * (2 * Math.PI * 16)} ${2 * Math.PI * 16}`}
+                                  strokeLinecap="round" transform="rotate(-90 20 20)" />
+                                <text x="20" y="24" textAnchor="middle" fill="white" fontSize="9" fontWeight="800">{r.score}</text>
+                              </svg>
+                            </div>
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${s.text} ${s.bg} ${s.border}`}>{r.grade}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* ── Desktop table ── */}
+                <div className="hidden sm:block bg-card border border-border rounded-xl overflow-hidden">
+                  <div className="grid grid-cols-[1fr_160px_100px] border-b border-border bg-muted/40 px-5 py-3">
+                    <span className="text-xs font-semibold text-muted-foreground">Retailer</span>
+                    <span className="text-xs font-semibold text-muted-foreground">Credit Score</span>
+                    <span className="text-xs font-semibold text-muted-foreground">Date</span>
+                  </div>
+                  {visibleReports.map((r, i) => {
+                    const s = scoreStyle(r.score);
+                    return (
+                      <div key={r.id + i} className="grid grid-cols-[1fr_160px_100px] items-center px-5 py-4 border-b border-border last:border-0 hover:bg-muted/20 transition-colors">
+                        <div className="min-w-0 pr-4 space-y-0.5">
+                          <p className="font-semibold text-sm text-foreground truncate">{r.customerName || r.retailerName || '—'}</p>
+                          {r.customerName && r.retailerName && (
+                            <p className="text-[11px] text-muted-foreground truncate"><span className="text-muted-foreground/60">Business:</span> {r.retailerName}</p>
+                          )}
+                          {r.customerPhone && (
+                            <p className="text-[11px] text-amber-400/80 truncate"><span className="text-muted-foreground/60">{r.customerName ? 'Contact Owner:' : 'Contact Business:'}</span> {r.customerPhone}</p>
+                          )}
+                          {r.retailerEmail ? (
+                            <div className="flex items-center gap-1 group">
+                              <p className="text-[11px] text-muted-foreground truncate">{r.retailerEmail}</p>
+                              <button onClick={() => copyEmail(r.id, r.retailerEmail)} className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
+                                {copiedId === r.id ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="relative w-10 h-10 shrink-0">
+                            <svg width="40" height="40" viewBox="0 0 40 40">
+                              <circle cx="20" cy="20" r="16" fill="none" stroke="hsl(220 15% 18%)" strokeWidth="4" />
+                              <circle cx="20" cy="20" r="16" fill="none" stroke={s.bar} strokeWidth="4"
+                                strokeDasharray={`${(r.score / 100) * (2 * Math.PI * 16)} ${2 * Math.PI * 16}`}
+                                strokeLinecap="round" transform="rotate(-90 20 20)" />
+                              <text x="20" y="24" textAnchor="middle" fill="white" fontSize="9" fontWeight="800">{r.score}</text>
+                            </svg>
+                          </div>
+                          <div>
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold border ${s.text} ${s.bg} ${s.border}`}>{r.grade}</span>
+                            <p className={`text-[10px] mt-0.5 ${s.text}`}>{r.label}</p>
+                          </div>
+                        </div>
+                        <div className="space-y-0.5">
+                          <span className="text-xs text-muted-foreground">{formatDate(r.dateAdded)}</span>
+                          {formatPeriod(r.periodStart, r.periodEnd) && (
+                            <div className="flex items-center gap-1">
+                              <Calendar size={9} className="text-amber-400/70 shrink-0" />
+                              <span className="text-[10px] text-amber-400/80">{formatPeriod(r.periodStart, r.periodEnd)}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* ── Locked rows banner ── */}
+                {lockedCount > 0 && (
+                  <div className="mt-4 border border-dashed border-amber-500/30 rounded-xl p-5 flex flex-col sm:flex-row items-center gap-4 bg-amber-500/5">
+                    <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/25 flex items-center justify-center shrink-0">
+                      <Lock size={18} className="text-amber-400" />
+                    </div>
+                    <div className="flex-1 text-center sm:text-left">
+                      <p className="text-sm font-semibold text-foreground">
+                        {lockedCount} more retailer{lockedCount !== 1 ? 's' : ''} locked
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Upgrade your slot limit to view their credit reports.
+                      </p>
+                    </div>
+                    <button
+                      onClick={openPayment}
+                      className="shrink-0 flex items-center gap-2 bg-amber-500 hover:bg-amber-400 text-black font-semibold text-xs rounded-lg px-4 py-2 transition-colors"
+                    >
+                      <CreditCard size={13} /> Unlock More
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
           </>
         )}
       </div>
     </div>
+
+    {/* ── M-Pesa Payment Modal ── */}
+    {paymentOpen && (
+      <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+
+          {/* Header */}
+          <div className="bg-gradient-to-br from-amber-900/40 to-amber-800/10 border-b border-border p-5 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center shrink-0">
+              <CreditCard size={20} className="text-amber-400" />
+            </div>
+            <div>
+              <p className="font-semibold text-sm text-foreground">Upgrade Retailer Slots</p>
+              <p className="text-xs text-muted-foreground">Pay via M-Pesa · Current limit: {quota}</p>
+            </div>
+            <button onClick={() => setPaymentOpen(false)} className="ml-auto text-muted-foreground hover:text-foreground transition-colors" aria-label="Close">
+              <X size={16} />
+            </button>
+          </div>
+
+          <div className="p-5 space-y-4">
+
+            {/* Step: choose tier */}
+            {paymentStep === 'tiers' && (
+              <>
+                <p className="text-xs text-muted-foreground">Select a plan to expand how many retailer credit reports you can access:</p>
+                <div className="space-y-2">
+                  {PAYMENT_TIERS.map(tier => (
+                    <button
+                      key={tier.amount}
+                      onClick={() => setSelectedTier(tier)}
+                      className={`w-full flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-all ${
+                        selectedTier?.amount === tier.amount
+                          ? 'border-amber-500/60 bg-amber-500/10'
+                          : 'border-border bg-muted/20 hover:border-amber-500/30 hover:bg-amber-500/5'
+                      }`}
+                    >
+                      <div className={`w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center transition-colors ${
+                        selectedTier?.amount === tier.amount ? 'border-amber-400' : 'border-muted-foreground/40'
+                      }`}>
+                        {selectedTier?.amount === tier.amount && <div className="w-2 h-2 rounded-full bg-amber-400" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-foreground">{tier.label}</p>
+                        {tier.badge && (
+                          <span className="text-[10px] font-bold text-amber-400 bg-amber-500/15 border border-amber-500/25 rounded-full px-1.5 py-0.5">{tier.badge}</span>
+                        )}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-sm font-bold text-foreground">KSh {tier.amount}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <Button
+                  className="w-full bg-amber-500 hover:bg-amber-400 text-black font-semibold gap-2"
+                  onClick={() => { if (selectedTier) setPaymentStep('phone'); }}
+                  disabled={!selectedTier}
+                >
+                  Continue <ChevronRight size={14} />
+                </Button>
+              </>
+            )}
+
+            {/* Step: enter phone */}
+            {(paymentStep === 'phone' || paymentStep === 'initiating') && selectedTier && (
+              <>
+                <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 flex items-center justify-between">
+                  <p className="text-xs text-muted-foreground">{selectedTier.label}</p>
+                  <p className="text-sm font-bold text-amber-400">KSh {selectedTier.amount}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground mb-3 leading-relaxed">Enter your Safaricom number to receive the M-Pesa prompt.</p>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-medium">+254</span>
+                    <Input
+                      type="tel"
+                      placeholder="7XX XXX XXX"
+                      value={paymentPhone}
+                      onChange={e => setPaymentPhone(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && paymentPhone.trim() && paymentStep === 'phone') initiatePayment(); }}
+                      className="pl-12 text-sm"
+                      disabled={paymentStep === 'initiating'}
+                      autoFocus
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="outline" className="flex-1" onClick={() => setPaymentStep('tiers')} disabled={paymentStep === 'initiating'}>Back</Button>
+                  <Button
+                    className="flex-1 bg-green-600 hover:bg-green-500 text-white font-semibold gap-2"
+                    onClick={initiatePayment}
+                    disabled={!paymentPhone.trim() || paymentStep === 'initiating'}
+                  >
+                    {paymentStep === 'initiating'
+                      ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Sending…</>
+                      : <><Smartphone size={14} />Pay via M-Pesa</>}
+                  </Button>
+                </div>
+              </>
+            )}
+
+            {/* Step: waiting */}
+            {paymentStep === 'waiting' && (
+              <>
+                <div className="text-center py-2 space-y-3">
+                  <div className="w-14 h-14 rounded-full bg-green-500/15 border border-green-500/30 flex items-center justify-center mx-auto">
+                    <span className="w-6 h-6 border-[3px] border-green-500/30 border-t-green-400 rounded-full animate-spin block" />
+                  </div>
+                  <div>
+                    <p className="font-semibold text-sm text-foreground">Check your phone</p>
+                    <p className="text-xs text-muted-foreground mt-1">Enter your M-Pesa PIN to pay <span className="font-semibold text-foreground">KSh {selectedTier?.amount}</span></p>
+                  </div>
+                  <div className="bg-muted/30 rounded-lg px-3 py-2 inline-block">
+                    <p className="text-xs text-muted-foreground">
+                      Expires in <span className="font-mono font-semibold text-foreground">
+                        {Math.floor(paymentCountdown / 60)}:{String(paymentCountdown % 60).padStart(2, '0')}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+                <p className="text-[11px] text-muted-foreground text-center">Payment detected automatically after you confirm on your phone.</p>
+                <button onClick={() => setPaymentOpen(false)} className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-1">Cancel</button>
+              </>
+            )}
+
+            {/* Step: success */}
+            {paymentStep === 'success' && (
+              <>
+                <div className="text-center py-4 space-y-3">
+                  <div className="w-14 h-14 rounded-full bg-green-500/20 border border-green-500/30 flex items-center justify-center mx-auto">
+                    <Check size={28} className="text-green-400" />
+                  </div>
+                  <div>
+                    <p className="font-semibold text-foreground">Payment confirmed!</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Your slot limit is now <span className="font-bold text-amber-400">{quota}</span> retailers.
+                    </p>
+                  </div>
+                </div>
+                <Button className="w-full bg-amber-500 hover:bg-amber-400 text-black font-semibold" onClick={() => setPaymentOpen(false)}>View Dashboard</Button>
+              </>
+            )}
+
+            {/* Step: error */}
+            {paymentStep === 'error' && (
+              <>
+                <div className="flex items-start gap-3 bg-destructive/10 border border-destructive/20 rounded-lg p-3">
+                  <AlertCircle size={16} className="text-destructive shrink-0 mt-0.5" />
+                  <p className="text-sm text-destructive leading-snug">{paymentError || 'Payment failed. Please try again.'}</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="outline" className="flex-1" onClick={() => { setPaymentStep('tiers'); setSelectedTier(null); }}>Change Plan</Button>
+                  <Button variant="outline" className="flex-1" onClick={() => { setPaymentStep('phone'); setPaymentError(null); }}>Try Again</Button>
+                </div>
+                <button onClick={() => setPaymentOpen(false)} className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-1">Cancel</button>
+              </>
+            )}
+
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
