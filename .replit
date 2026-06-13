@@ -40,12 +40,12 @@ waitForPort = 8080
 name = "API Server"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "PORT=8082 pnpm --filter @workspace/api-server run dev"
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "until nc -z localhost 8082 2>/dev/null; do sleep 0.5; done && sleep infinity"
 
 [agent]
 stack = "PNPM_WORKSPACE"
