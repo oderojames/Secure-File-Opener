@@ -34,7 +34,8 @@ export default function AuthPage() {
       // New accounts are routed to the "finish creating account" screen automatically.
     } catch (e: any) {
       const code = e?.code ?? '';
-      if (!code.includes('popup-closed') && !code.includes('cancelled-popup') && !code.includes('popup-blocked')) {
+      // Ignore user-initiated cancellations (closing the popup), surface everything else.
+      if (!code.includes('popup-closed') && !code.includes('cancelled-popup')) {
         setError(friendlyError(code));
       }
       setGoogleLoading(false);
@@ -82,6 +83,10 @@ export default function AuthPage() {
     if (code.includes('too-many-requests')) return 'Too many attempts. Please wait a few minutes and try again.';
     if (code.includes('network-request-failed') || code.includes('network')) return 'Network error. Please check your connection and try again.';
     if (code.includes('user-disabled')) return 'This account has been disabled. Please contact support.';
+    if (code.includes('unauthorized-domain')) return 'Google sign-in is not yet enabled for this web address. Please contact support.';
+    if (code.includes('operation-not-allowed')) return 'Google sign-in is not enabled for this app yet. Please contact support.';
+    if (code.includes('popup-blocked')) return 'Your browser blocked the Google sign-in window. Please allow pop-ups and try again.';
+    if (code.includes('account-exists-with-different-credential')) return 'An account already exists with this email using a different sign-in method.';
     return 'Something went wrong. Please try again.';
   };
 
