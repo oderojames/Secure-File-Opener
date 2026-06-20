@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { Phone, X } from 'lucide-react';
-import contactIcon from '@assets/image_1781984218822.png';
+import { Phone, X, Headset } from 'lucide-react';
 
 const SUPPORT_NUMBERS = ['0114458799', '0721628310'];
 
@@ -12,7 +11,7 @@ export default function ContactWidget() {
       {open && (
         <div className="w-72 bg-card border border-border rounded-2xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-primary/10">
-            <img src={contactIcon} alt="" className="w-5 h-5 object-contain dark:invert" />
+            <Headset size={16} className="text-primary" />
             <div className="flex-1">
               <p className="text-sm font-semibold text-foreground leading-tight">Customer Support</p>
               <p className="text-[11px] text-muted-foreground">We're here to help with any issues or enquiries</p>
@@ -43,27 +42,12 @@ export default function ContactWidget() {
         onClick={() => setOpen(o => !o)}
         aria-label={open ? 'Close contact support' : 'Contact support'}
         aria-expanded={open}
-        className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-white shadow-lg shadow-black/30 ring-1 ring-black/5 hover:scale-105 transition-transform"
+        className="relative inline-flex items-center justify-center w-14 h-14 rounded-full bg-gradient-to-br from-primary to-primary/80 text-white shadow-lg shadow-primary/40 hover:scale-105 active:scale-95 transition-transform"
       >
-        {open ? (
-          <X size={22} className="text-foreground" />
-        ) : (
-          <span
-            aria-hidden
-            className="w-5 h-5"
-            style={{
-              backgroundColor: 'hsl(220 80% 50%)',
-              WebkitMaskImage: `url(${contactIcon})`,
-              maskImage: `url(${contactIcon})`,
-              WebkitMaskSize: 'contain',
-              maskSize: 'contain',
-              WebkitMaskRepeat: 'no-repeat',
-              maskRepeat: 'no-repeat',
-              WebkitMaskPosition: 'center',
-              maskPosition: 'center',
-            }}
-          />
+        {!open && (
+          <span className="absolute inset-0 rounded-full bg-primary/40 animate-ping" />
         )}
+        {open ? <X size={24} /> : <Headset size={24} className="relative" />}
       </button>
     </div>
   );
