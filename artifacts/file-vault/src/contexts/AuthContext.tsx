@@ -24,9 +24,11 @@ interface AuthUser extends User {
 interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
+  profileComplete: boolean | null;
   signInWithEmail: (email: string, password: string) => Promise<{ role: 'retailer' | 'wholesaler' }>;
   signUpWithEmail: (name: string, email: string, password: string, role?: 'retailer' | 'wholesaler', businessType?: string) => Promise<void>;
-  signInWithGoogle: (role?: 'retailer' | 'wholesaler') => Promise<void>;
+  signInWithGoogle: (role?: 'retailer' | 'wholesaler') => Promise<{ isNew: boolean; role: 'retailer' | 'wholesaler' }>;
+  completeProfile: (role: 'retailer' | 'wholesaler', businessType: string, name: string) => Promise<void>;
   signOut: () => Promise<void>;
   sendPasswordReset: (email: string) => Promise<void>;
   deleteAccount: (password: string) => Promise<void>;
@@ -71,15 +73,22 @@ async function ensureUserDoc(user: User, role: 'retailer' | 'wholesaler' = 'reta
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [profileComplete, setProfileComplete] = useState<boolean | null>(null);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         const snap = await getDoc(doc(db, 'users', firebaseUser.uid)).catch(() => null);
+        // Guard against stale async callbacks: if the auth user changed (e.g. a
+        // sign-out happened) while we were fetching, ignore this outdated event.
+        if (auth.currentUser?.uid !== firebaseUser.uid) return;
+        const exists = !!snap?.exists();
         const role = (snap?.data()?.role as 'retailer' | 'wholesaler') ?? 'retailer';
         setUser(Object.assign(firebaseUser, { role }));
+        setProfileComplete(exists);
       } else {
         setUser(null);
+        setProfileComplete(null);
       }
       setLoading(false);
     });
@@ -132,9 +141,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return false;
   };
 
-  const signInWithGoogle = async (role: 'retailer' | 'wholesaler' = 'retailer') => {
+  const signInWithGoogle = async (role: 'retailer' | 'wholesaler' = 'retailer'): Promise<{ isNew: boolean; role: 'retailer' | 'wholesaler' }> => {
     const cred = await signInWithPopup(auth, googleProvider);
-    await ensureUserDoc(cred.user, role);
+    const snap = await getDoc(doc(db, 'users', cred.user.uid)).catch(() => null);
+    if (snap?.exists()) {
+      const existingRole = (snap.data()?.role as 'retailer' | 'wholesaler') ?? 'retailer';
+      setUser(Object.assign(cred.user, { role: existingRole }));
+      setProfileComplete(true);
+      return { isNew: false, role: existingRole };
+    }
+    // New Google account — do NOT auto-provision. Require account creation.
+    setProfileComplete(false);
+    return { isNew: true, role };
+  };
+
+  const completeProfile = async (role: 'retailer' | 'wholesaler', businessType: string, name: string) => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) throw { code: 'auth/no-user' };
+    if (name.trim()) {
+      await updateProfile(currentUser, { displayName: name.trim() });
+    }
+    await ensureUserDoc(currentUser, role, businessType);
+    setUser(Object.assign(currentUser, { role }));
+    setProfileComplete(true);
   };
 
   const signOut = async () => {
@@ -173,7 +202,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signInWithEmail, signUpWithEmail, signInWithGoogle, signOut, sendPasswordReset, deleteAccount, sendVerificationEmail, reloadUser }}>
+    <AuthContext.Provider value={{ user, loading, profileComplete, signInWithEmail, signUpWithEmail, signInWithGoogle, completeProfile, signOut, sendPasswordReset, deleteAccount, sendVerificationEmail, reloadUser }}>
       {children}
     </AuthContext.Provider>
   );

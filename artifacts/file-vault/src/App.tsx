@@ -8,6 +8,7 @@ import Vault from "@/pages/Vault";
 import AuthPage from "@/pages/AuthPage";
 import HomePage from "@/pages/HomePage";
 import WholesalerPage from "@/pages/WholesalerPage";
+import CompleteProfileScreen from "@/components/CompleteProfileScreen";
 import NotFound from "@/pages/not-found";
 import { Building2, ShieldCheck, Mail, RefreshCw, CheckCircle2, AlertCircle } from "lucide-react";
 
@@ -151,7 +152,7 @@ function EmailVerificationScreen({ accentClass = 'text-primary', borderClass = '
 }
 
 function RetailerPortal() {
-  const { user, loading } = useAuth();
+  const { user, loading, profileComplete } = useAuth();
 
   if (loading) {
     return (
@@ -167,6 +168,8 @@ function RetailerPortal() {
   if (!user) return <AuthPage />;
 
   if (!user.emailVerified) return <EmailVerificationScreen />;
+
+  if (profileComplete === false) return <CompleteProfileScreen role="retailer" />;
 
   if (user.role === 'wholesaler') {
     return (

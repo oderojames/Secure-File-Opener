@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/contexts/AuthContext';
 import WholesalerAuthPage from '@/pages/WholesalerAuthPage';
+import CompleteProfileScreen from '@/components/CompleteProfileScreen';
 import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock, Calendar, Mail, CheckCircle2, Smartphone, CreditCard, ChevronRight, X, Filter } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -858,7 +859,7 @@ function WholesalerDashboard() {
 }
 
 export default function WholesalerPage() {
-  const { user, loading, signOut } = useAuth();
+  const { user, loading, profileComplete, signOut } = useAuth();
   const [, navigate] = useLocation();
 
   if (loading) {
@@ -875,6 +876,8 @@ export default function WholesalerPage() {
   if (!user) return <WholesalerAuthPage />;
 
   if (!user.emailVerified) return <EmailVerificationBanner />;
+
+  if (profileComplete === false) return <CompleteProfileScreen role="wholesaler" />;
 
   if (user.role === 'retailer') {
     return (
