@@ -24,7 +24,7 @@ export default function HomePage() {
           </div>
           <p className="text-sm font-semibold tracking-[0.2em] uppercase text-primary mb-2">Welcome to</p>
           <h1 className="text-5xl font-extrabold tracking-tight text-foreground">Doyang</h1>
-          <p className="text-muted-foreground mt-3 text-base">M-Pesa Creditworthiness Platform</p>
+          <p className="text-muted-foreground mt-3 text-base">Creditworthiness Platform</p>
         </div>
 
         {/* Portal selection */}
@@ -45,7 +45,7 @@ export default function HomePage() {
               </div>
               <div className="flex-1">
                 <h2 className="text-base font-bold text-foreground">Retailer Portal</h2>
-                <p className="text-sm text-muted-foreground mt-0.5">Assess customer creditworthiness via M-Pesa</p>
+                <p className="text-sm text-muted-foreground mt-0.5">Assess credit to grow</p>
               </div>
               <svg className="text-muted-foreground group-hover:text-primary group-hover:translate-x-1 transition-all duration-200" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="9 18 15 12 9 6"/>
