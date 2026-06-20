@@ -438,8 +438,8 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
                             )}
                             {r.retailerEmail && (
                               <div className="flex items-center gap-1">
-                                <p className="text-[11px] text-muted-foreground truncate">{r.retailerEmail}</p>
-                                <button onClick={() => copyEmail(r.id, r.retailerEmail)} className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground">
+                                <a href={`mailto:${r.retailerEmail}`} className="text-[11px] text-muted-foreground truncate hover:text-primary hover:underline">{r.retailerEmail}</a>
+                                <button onClick={() => copyEmail(r.id, r.retailerEmail)} className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground" title="Copy email">
                                   {copiedId === r.id ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
                                 </button>
                               </div>
@@ -491,8 +491,8 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
                           )}
                           {r.retailerEmail ? (
                             <div className="flex items-center gap-1 group">
-                              <p className="text-[11px] text-muted-foreground truncate">{r.retailerEmail}</p>
-                              <button onClick={() => copyEmail(r.id, r.retailerEmail)} className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
+                              <a href={`mailto:${r.retailerEmail}`} className="text-[11px] text-muted-foreground truncate hover:text-primary hover:underline">{r.retailerEmail}</a>
+                              <button onClick={() => copyEmail(r.id, r.retailerEmail)} className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground" title="Copy email">
                                 {copiedId === r.id ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
                               </button>
                             </div>
