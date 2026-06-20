@@ -136,8 +136,8 @@ export default function TermsGate({ children }: { children: ReactNode }) {
               role="checkbox"
               aria-checked={checked}
               onClick={() => setChecked(c => !c)}
-              className={`mt-0.5 shrink-0 w-5 h-5 rounded border flex items-center justify-center transition-colors ${
-                checked ? 'bg-primary border-primary text-white' : 'border-input bg-background'
+              className={`mt-0.5 shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                checked ? 'bg-primary border-primary text-white' : 'border-primary/60 bg-background hover:border-primary'
               }`}
             >
               {checked && <Check size={14} />}
