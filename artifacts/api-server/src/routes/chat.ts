@@ -3,7 +3,10 @@ import OpenAI from "openai";
 
 function getOpenAI(): OpenAI | null {
   const apiKey =
-    process.env["OPENAI_API_KEYS"] ?? process.env["OPENAI_API_KEY"] ?? "";
+    process.env["OPENAI_API_KEY_CHAT"] ??
+    process.env["OPENAI_API_KEYS"] ??
+    process.env["OPENAI_API_KEY"] ??
+    "";
   if (!apiKey) return null;
   const isOpenRouter = apiKey.startsWith("sk-or-");
   return new OpenAI({
