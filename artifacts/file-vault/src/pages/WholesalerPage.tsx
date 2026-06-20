@@ -123,7 +123,14 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
   const [quota, setQuota]         = useState(FREE_QUOTA);
   const [quotaLoading, setQuotaLoading] = useState(true);
   const [wholesalerBusinessType, setWholesalerBusinessType] = useState<string | null>(null);
-  const [businessTypeFilter, setBusinessTypeFilter] = useState(false);
+  const [businessTypeFilter, setBusinessTypeFilter] = useState<boolean>(() => {
+    try { return localStorage.getItem('doyang_btype_filter') === 'true'; } catch { return false; }
+  });
+
+  const toggleFilter = (val: boolean) => {
+    setBusinessTypeFilter(val);
+    try { localStorage.setItem('doyang_btype_filter', String(val)); } catch {}
+  };
 
   const [paymentOpen, setPaymentOpen]   = useState(false);
   const [selectedTier, setSelectedTier] = useState<typeof PAYMENT_TIERS[0] | null>(null);
@@ -304,29 +311,12 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
     <div className="flex-1 flex flex-col overflow-hidden">
 
       {/* Quota bar */}
-      <div className="px-4 sm:px-6 pt-4 pb-2 flex items-center gap-2 flex-wrap">
+      <div className="px-4 sm:px-6 pt-4 pb-2 flex items-center gap-2">
         <div className="flex-1 text-xs text-muted-foreground min-w-0">
           Showing <span className="font-semibold text-foreground">{Math.min(quota, displayReports.length)}</span> of{' '}
           <span className="font-semibold text-foreground">{displayReports.length}</span> retailers · Slot limit:{' '}
           <span className="font-semibold text-amber-400">{quota}</span>
-          {businessTypeFilter && wholesalerBusinessType && (
-            <span className="ml-1 text-green-400">· filtered by field</span>
-          )}
         </div>
-        {wholesalerBusinessType && (
-          <button
-            onClick={() => setBusinessTypeFilter(f => !f)}
-            title={businessTypeFilter ? `Remove filter: ${wholesalerBusinessType}` : `Filter by my field: ${wholesalerBusinessType}`}
-            className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg border transition-colors shrink-0 ${
-              businessTypeFilter
-                ? 'bg-green-500/15 border-green-500/30 text-green-400 hover:bg-green-500/25'
-                : 'bg-muted/50 border-border text-muted-foreground hover:border-green-500/30 hover:text-green-400'
-            }`}
-          >
-            <Filter size={11} />
-            {businessTypeFilter ? 'My Field' : 'All Fields'}
-          </button>
-        )}
         <button
           onClick={openPayment}
           className="flex items-center gap-1.5 text-xs font-semibold text-amber-400 hover:text-amber-300 transition-colors bg-amber-500/10 border border-amber-500/25 rounded-lg px-3 py-1.5 shrink-0"
@@ -337,6 +327,38 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
           <RefreshCw size={13} />
         </Button>
       </div>
+
+      {/* View mode setting — only shown when wholesaler has a business type */}
+      {wholesalerBusinessType && (
+        <div className="px-4 sm:px-6 pb-3">
+          <div className="flex items-center gap-3 bg-muted/20 border border-border/60 rounded-xl px-4 py-2.5">
+            <Filter size={12} className="text-muted-foreground shrink-0" />
+            <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide shrink-0">View</span>
+            <div className="flex ml-auto bg-muted rounded-lg p-0.5">
+              <button
+                onClick={() => toggleFilter(false)}
+                className={`px-3 py-1 text-xs font-semibold rounded-md transition-all whitespace-nowrap ${
+                  !businessTypeFilter
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                All available
+              </button>
+              <button
+                onClick={() => toggleFilter(true)}
+                className={`px-3 py-1 text-xs font-semibold rounded-md transition-all whitespace-nowrap ${
+                  businessTypeFilter
+                    ? 'bg-green-500/20 text-green-400'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {wholesalerBusinessType} only
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Search bar */}
       <div className="px-4 sm:px-6 py-2">
