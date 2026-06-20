@@ -1,0 +1,1 @@
+- [api-server has no auth](api-server-no-auth.md) — all routes public; money-spending endpoints must self-throttle (per-IP rate limit + input caps).

@@ -11,6 +11,7 @@ import WholesalerPage from "@/pages/WholesalerPage";
 import CompleteProfileScreen from "@/components/CompleteProfileScreen";
 import TermsGate from "@/components/TermsGate";
 import ContactWidget from "@/components/ContactWidget";
+import Chatbot from "@/components/Chatbot";
 import NotFound from "@/pages/not-found";
 import { Building2, ShieldCheck, Mail, RefreshCw, CheckCircle2, AlertCircle } from "lucide-react";
 
@@ -199,6 +200,48 @@ function Router() {
   );
 }
 
+const RETAILER_FEATURES = [
+  "Upload your M-Pesa statement (PDF) — it's encrypted in transit and never stored; only the analysis report is saved.",
+  "Get a credit report with a score (out of 100), a grade (A–E) and a recommended credit limit.",
+  "Review key metrics from your statement: cash flow, turnover, transaction frequency, business activity and risk factors.",
+  "See your statement period and the number of transactions analysed.",
+  "Control who sees your report — keep it private, make it visible, or share it with specific wholesalers.",
+  "Open or delete any of your past analyses.",
+];
+
+const WHOLESALER_FEATURES = [
+  "View credit reports for retailers who have shared with you — score, grade and recommended limit.",
+  "See each retailer's business name, owner contact, phone, email (tap the email to write a message), statement period and date added.",
+  "Search to quickly find a specific retailer.",
+  "Track how many report slots you've used against your quota.",
+  "Upgrade your slot limit via M-Pesa to unlock more retailer reports.",
+];
+
+function FloatingHelp() {
+  const [location] = useLocation();
+  if (location.startsWith("/retailer")) {
+    return (
+      <Chatbot
+        key="retailer"
+        screenName="Retailer Portal"
+        screenContext="The Retailer Portal (Credit Vault). Retailers upload their M-Pesa statement (PDF) to receive a credit assessment. The statement is encrypted in transit and never stored — only the resulting report is saved. The report shows a credit score out of 100, a grade from A to E, a recommended credit limit, and metrics such as cash flow, turnover, transaction frequency, business activity and risk factors, plus the statement period and number of transactions. Retailers control report visibility (private, visible, or shared with specific wholesalers) and can open or delete past analyses."
+        features={RETAILER_FEATURES}
+      />
+    );
+  }
+  if (location.startsWith("/wholesaler")) {
+    return (
+      <Chatbot
+        key="wholesaler"
+        screenName="Wholesaler Portal"
+        screenContext="The Wholesaler Portal (Retailers Managed dashboard). Wholesalers view credit reports for retailers who have shared with them, including score, grade and recommended credit limit. Each entry shows the retailer's business name, owner contact, phone, email (a clickable mailto link), the M-Pesa statement period and the date added. IMPORTANT: wholesalers CANNOT manually add a retailer — there is no 'add retailer' button. A retailer appears here automatically only after that retailer uploads their M-Pesa statement and chooses to make their report public or share it with this wholesaler. Wholesalers can search the retailers they already have. There is a free quota of report slots; once it is reached, extra retailers are locked and the wholesaler can pay via M-Pesa to upgrade their slot limit and unlock more reports. Email must be verified to access the dashboard."
+        features={WHOLESALER_FEATURES}
+      />
+    );
+  }
+  return <ContactWidget />;
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -207,9 +250,9 @@ function App() {
           <TermsGate>
             <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
               <Router />
+              <FloatingHelp />
             </WouterRouter>
           </TermsGate>
-          <ContactWidget />
         </AuthProvider>
         <Toaster />
       </TooltipProvider>
