@@ -85,14 +85,16 @@ function gradeColor(grade: string) {
   if (grade === 'A') return '#22c55e';
   if (grade === 'B') return '#3b82f6';
   if (grade === 'C') return '#f59e0b';
-  return '#ef4444';
+  if (grade === 'D') return '#ef4444';
+  return '#7c3aed'; // E — High Risk
 }
 
 function scoreColor(score: number) {
-  if (score >= 80) return '#22c55e';
-  if (score >= 60) return '#3b82f6';
-  if (score >= 50) return '#f59e0b';
-  return '#ef4444';
+  if (score >= 85) return '#22c55e'; // Excellent
+  if (score >= 70) return '#3b82f6'; // Good
+  if (score >= 55) return '#f59e0b'; // Fair
+  if (score >= 40) return '#ef4444'; // Review Required
+  return '#7c3aed'; // High Risk
 }
 
 function CreditGauge({ score, grade, label }: { score: number; grade: string; label: string }) {
@@ -296,7 +298,8 @@ export default function Vault() {
 
   const [paymentGate, setPaymentGate] = useState<File | null>(null);
   const [paymentPhone, setPaymentPhone] = useState('');
-  const [paymentStep, setPaymentStep] = useState<'phone' | 'initiating' | 'waiting' | 'error'>('phone');
+  const [paymentStep, setPaymentStep] = useState<'methodSelect' | 'phone' | 'initiating' | 'waiting' | 'error'>('methodSelect');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'sendmoney' | 'paybill' | 'tillnumber' | 'bankpaybill'>('sendmoney');
   const [paymentTxRef, setPaymentTxRef] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [paymentCountdown, setPaymentCountdown] = useState(90);
@@ -477,7 +480,7 @@ export default function Vault() {
       const text = await extractText(pdfData, password);
       const res = await fetch('/api/analyze/mpesa', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, paymentMethod: selectedPaymentMethod }),
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({ error: 'Unknown error' }));
@@ -602,7 +605,8 @@ export default function Vault() {
     }
     setPaymentGate(file);
     setPaymentPhone('');
-    setPaymentStep('phone');
+    setSelectedPaymentMethod('sendmoney');
+    setPaymentStep('methodSelect');
     setPaymentTxRef(null);
     setPaymentError(null);
     setPaymentCountdown(90);
@@ -1110,6 +1114,48 @@ export default function Vault() {
           </div>
 
           <div className="p-5 space-y-4">
+            {/* Step: choose payment method */}
+            {paymentStep === 'methodSelect' && (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  How do customers pay you? This filters which transactions count as business income.
+                </p>
+                <div className="space-y-2">
+                  {([
+                    { value: 'sendmoney' as const, icon: <Phone size={15} className="text-green-400" />, label: 'Send Money / Pochi la Biashara', desc: 'Customers send money directly to your M-Pesa' },
+                    { value: 'paybill'   as const, icon: <CreditCard size={15} className="text-blue-400" />, label: 'M-Pesa PayBill', desc: 'Customers pay via your business PayBill number' },
+                    { value: 'tillnumber' as const, icon: <ShoppingBag size={15} className="text-amber-400" />, label: 'Till Number (Buy Goods)', desc: 'Customers scan your Lipa na M-Pesa till' },
+                    { value: 'bankpaybill' as const, icon: <Building2 size={15} className="text-purple-400" />, label: 'Bank PayBill', desc: 'Customers pay via your bank-linked PayBill' },
+                  ]).map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setSelectedPaymentMethod(opt.value)}
+                      className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-all text-left ${selectedPaymentMethod === opt.value ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/40 hover:bg-muted/30'}`}
+                    >
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${selectedPaymentMethod === opt.value ? 'bg-primary/20 border border-primary/30' : 'bg-muted border border-border'}`}>
+                        {opt.icon}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold text-foreground leading-tight">{opt.label}</p>
+                        <p className="text-[10px] text-muted-foreground leading-tight mt-0.5">{opt.desc}</p>
+                      </div>
+                      {selectedPaymentMethod === opt.value && (
+                        <div className="w-4 h-4 rounded-full bg-primary flex items-center justify-center shrink-0">
+                          <svg width="8" height="8" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+                <Button
+                  className="w-full bg-green-600 hover:bg-green-500 text-white font-semibold"
+                  onClick={() => setPaymentStep('phone')}
+                >
+                  Continue
+                </Button>
+              </div>
+            )}
+
             {/* Step: enter phone */}
             {(paymentStep === 'phone' || paymentStep === 'initiating') && (
               <>

@@ -319,10 +319,28 @@ function dedup(txs: RawTransaction[]): RawTransaction[] {
 
 // ─── Scoring engine ───────────────────────────────────────────────────────────
 
-function computeScore(txs: RawTransaction[]) {
-  const credits = txs.filter(t => t.type === "credit");
-  const debits  = txs.filter(t => t.type === "debit" && !t.isFee);
-  const fees    = txs.filter(t => t.isFee);
+type ScoreFactor = { name: string; score: number; weight: number; impact: "positive" | "neutral" | "negative"; detail: string };
+
+function computeScore(txs: RawTransaction[], paymentMethod = "sendmoney") {
+  // ── Income filter by payment method ─────────────────────────────────────────
+  const PAYBILL_IN_RE    = /business payment|lipa na mpesa.*paybill|received.*paybill|paybill.*received|pay bill.*received/i;
+  const TILLNUMBER_IN_RE = /merchant payment|buy goods|till number|lipa na mpesa.*goods|pochi la biashara/i;
+  const BANK_IN_RE       = /bank.*transfer|received from bank|bank credit|rtgs|eft|bank payment/i;
+
+  const isBusinessIncome = (t: RawTransaction): boolean => {
+    if (t.type !== "credit") return false;
+    switch (paymentMethod) {
+      case "paybill":     return PAYBILL_IN_RE.test(t.description);
+      case "tillnumber":  return TILLNUMBER_IN_RE.test(t.description);
+      case "bankpaybill": return BANK_IN_RE.test(t.description);
+      default:            return true; // sendmoney: all credits count
+    }
+  };
+
+  const credits    = txs.filter(isBusinessIncome);
+  const debits     = txs.filter(t => t.type === "debit" && !t.isFee);
+  const fees       = txs.filter(t => t.isFee);
+  const allCredits = txs.filter(t => t.type === "credit");
 
   const totalIncome      = round2(credits.reduce((s, t) => s + t.amount, 0));
   const totalExpenditure = round2(debits.reduce((s, t) => s + t.amount, 0));
@@ -330,93 +348,170 @@ function computeScore(txs: RawTransaction[]) {
   const netCashFlow      = round2(totalIncome - totalExpenditure - totalFees);
   const cashFlowRatio    = totalExpenditure === 0 ? 2.0 : round2(totalIncome / totalExpenditure);
 
-  const monthMap: Record<string, { income: number; spending: number; incomeCount: number }> = {};
+  // ── Monthly breakdown ────────────────────────────────────────────────────────
+  const monthMap: Record<string, { income: number; spending: number; incomeCount: number; activeDays: Set<string> }> = {};
   for (const t of txs) {
     const ym = t.date.substring(0, 7);
     if (!ym || ym.length < 7) continue;
-    if (!monthMap[ym]) monthMap[ym] = { income: 0, spending: 0, incomeCount: 0 };
-    if (t.type === "credit") { monthMap[ym].income += t.amount; monthMap[ym].incomeCount++; }
+    if (!monthMap[ym]) monthMap[ym] = { income: 0, spending: 0, incomeCount: 0, activeDays: new Set() };
+    monthMap[ym].activeDays.add(t.date);
+    if (isBusinessIncome(t)) { monthMap[ym].income += t.amount; monthMap[ym].incomeCount++; }
     if (t.type === "debit" && !t.isFee) monthMap[ym].spending += t.amount;
   }
-  const months = Object.keys(monthMap).sort();
+  const months     = Object.keys(monthMap).sort();
   const monthCount = months.length || 1;
-
   const monthlyIncomeAmounts = months.map(m => monthMap[m].income);
   const avgMonthlyIncome = round2(totalIncome / monthCount);
   const avgDailyIncome   = round2(totalIncome / Math.max(daySpan(txs), 1));
-
   const totalIncomeCount  = credits.length;
   const avgIncomePerMonth = totalIncomeCount / monthCount;
 
-  const debtCount = txs.filter(t =>
-    /fuliza|loan repayment|kcb mpesa|okoa jahazi|m-shwari/i.test(t.description)
-  ).length;
-
-  const savingsCount = txs.filter(t =>
-    /lock savings|m-shwari deposit|savings|fixed/i.test(t.description)
-  ).length;
-
-  const maxWithdrawal = debits.filter(t => t.category === "Withdrawal")
-    .reduce((max, t) => Math.max(max, t.amount), 0);
-
-  const payers = new Set(credits.map(t => t.description.replace(/\d{4,}/g, "").trim().toLowerCase().slice(0, 30)));
-  const incomeSourceCount = payers.size;
-
-  const monthsWithBills = months.filter(m =>
-    txs.some(t => t.date.startsWith(m) && t.category === "Bill Payment")
-  ).length;
-
-  // Factor scores
-  const F1 = cashFlowRatio >= 2.5 ? 100 : cashFlowRatio >= 2.0 ? 90 : cashFlowRatio >= 1.5 ? 75
-    : cashFlowRatio >= 1.2 ? 60 : cashFlowRatio >= 1.0 ? 42 : cashFlowRatio >= 0.8 ? 25 : 10;
-
+  // ── Shared sub-calcs ─────────────────────────────────────────────────────────
   const mean = avgMonthlyIncome;
   const cv = mean === 0 ? 1 : (() => {
     const variance = monthlyIncomeAmounts.reduce((s, x) => s + Math.pow(x - mean, 2), 0) / monthlyIncomeAmounts.length;
     return Math.sqrt(variance) / mean;
   })();
-  const F2 = cv <= 0.10 ? 100 : cv <= 0.20 ? 85 : cv <= 0.35 ? 65 : cv <= 0.55 ? 45 : cv <= 0.80 ? 25 : 10;
+  const inactiveMonths = monthlyIncomeAmounts.filter(m => m === 0).length;
+  const inactiveRatio  = inactiveMonths / monthCount;
 
-  const F3 = avgIncomePerMonth >= 12 ? 100 : avgIncomePerMonth >= 8 ? 85 : avgIncomePerMonth >= 4 ? 65
-    : avgIncomePerMonth >= 2 ? 45 : avgIncomePerMonth >= 1 ? 30 : 10;
+  const debtCount  = txs.filter(t => /fuliza|loan repayment|kcb mpesa|okoa jahazi|m-shwari/i.test(t.description)).length;
+  const loanTotal  = txs.filter(t => t.category === "Loan").reduce((s, t) => s + t.amount, 0);
+  const debtRatio  = totalIncome === 0 ? 0 : loanTotal / totalIncome;
 
-  const debtRatio = totalIncome === 0 ? 0 : (txs.filter(t => t.category === "Loan").reduce((s, t) => s + t.amount, 0) / totalIncome);
-  const F4 = debtCount === 0 ? 100 : debtRatio <= 0.05 ? 80 : debtRatio <= 0.10 ? 60
-    : debtRatio <= 0.20 ? 40 : debtRatio <= 0.35 ? 25 : 10;
+  const savingsCount  = txs.filter(t => /lock savings|m-shwari deposit|savings|fixed/i.test(t.description)).length;
+  const maxWithdrawal = debits.filter(t => t.category === "Withdrawal").reduce((max, t) => Math.max(max, t.amount), 0);
+  const payers        = new Set(allCredits.map(t => t.description.replace(/\d{4,}/g, "").trim().toLowerCase().slice(0, 30)));
+  const incomeSourceCount = payers.size;
+  const monthsWithBills   = months.filter(m => txs.some(t => t.date.startsWith(m) && t.category === "Bill Payment")).length;
 
-  const F5 = monthCount >= 6 ? 100 : monthCount >= 4 ? 80 : monthCount >= 3 ? 65 : monthCount >= 2 ? 45 : 25;
+  // ── S1: Cash Flow Consistency (28 pts) ──────────────────────────────────────
+  let S1: number;
+  if      (cv <= 0.10 && inactiveRatio === 0  ) S1 = 28;
+  else if (cv <= 0.20 && inactiveRatio <= 0.10) S1 = 24;
+  else if (cv <= 0.35 && inactiveRatio <= 0.20) S1 = 19;
+  else if (cv <= 0.55 && inactiveRatio <= 0.30) S1 = 13;
+  else if (cv <= 0.80                         ) S1 = 7;
+  else                                           S1 = 2;
 
-  const F6 = savingsCount >= 3 ? 100 : savingsCount >= 1 ? 70 : incomeSourceCount >= 3 ? 60
-    : monthsWithBills >= Math.floor(monthCount * 0.7) ? 55 : 30;
+  // ── S2: Monthly Turnover (17 pts) ───────────────────────────────────────────
+  let S2: number;
+  if      (avgMonthlyIncome >= 500_000) S2 = 17;
+  else if (avgMonthlyIncome >= 200_000) S2 = 15;
+  else if (avgMonthlyIncome >= 100_000) S2 = 13;
+  else if (avgMonthlyIncome >= 50_000 ) S2 = 10;
+  else if (avgMonthlyIncome >= 20_000 ) S2 = 7;
+  else if (avgMonthlyIncome >= 10_000 ) S2 = 4;
+  else if (avgMonthlyIncome >= 3_000  ) S2 = 2;
+  else                                   S2 = 1;
 
-  const F7 = incomeSourceCount >= 5 ? 100 : incomeSourceCount >= 3 ? 75 : incomeSourceCount >= 2 ? 55 : 30;
+  // ── S3: Transaction Frequency (17 pts) ──────────────────────────────────────
+  let S3: number;
+  if      (avgIncomePerMonth >= 30) S3 = 17;
+  else if (avgIncomePerMonth >= 20) S3 = 14;
+  else if (avgIncomePerMonth >= 10) S3 = 11;
+  else if (avgIncomePerMonth >= 5 ) S3 = 8;
+  else if (avgIncomePerMonth >= 2 ) S3 = 5;
+  else if (avgIncomePerMonth >= 1 ) S3 = 2;
+  else                               S3 = 0;
 
-  const finalScore = Math.round(
-    F1 * 0.35 + F2 * 0.20 + F3 * 0.15 + F4 * 0.15 + F5 * 0.05 + F6 * 0.05 + F7 * 0.05
-  );
+  // ── S4: Business Age / Statement Coverage (10 pts) ──────────────────────────
+  const dayRange      = daySpan(txs);
+  const monthsCovered = dayRange / 30.44;
+  let S4: number;
+  if      (monthsCovered > 24) S4 = 10;
+  else if (monthsCovered >= 12) S4 = 8;
+  else if (monthsCovered >= 6 ) S4 = 6;
+  else if (monthsCovered >= 3 ) S4 = 3;
+  else                           S4 = 1;
+
+  // ── S5: Active Days per Month (10 pts) ──────────────────────────────────────
+  const avgActiveDays = months.length > 0
+    ? months.reduce((sum, m) => sum + monthMap[m].activeDays.size, 0) / months.length
+    : 0;
+  let S5: number;
+  if      (avgActiveDays > 25)  S5 = 10;
+  else if (avgActiveDays >= 20) S5 = 8;
+  else if (avgActiveDays >= 15) S5 = 5;
+  else                           S5 = 2;
+
+  // ── S6: Repayment History (10 pts) ──────────────────────────────────────────
+  let S6: number;
+  if      (debtCount === 0    ) S6 = 10;
+  else if (debtRatio <= 0.05  ) S6 = 8;
+  else if (debtRatio <= 0.10  ) S6 = 6;
+  else if (debtRatio <= 0.20  ) S6 = 4;
+  else if (debtRatio <= 0.35  ) S6 = 2;
+  else                           S6 = 0;
+
+  // ── S7: M-Pesa Account Activity (5 pts) ─────────────────────────────────────
+  const hasDeposits    = txs.some(t => /deposit|cash deposit|deposited/i.test(t.description) && t.type === "credit");
+  const hasWithdrawals = txs.some(t => t.category === "Withdrawal");
+  const hasSendMoney   = txs.some(t => /send money|sent to|funds transfer/i.test(t.description));
+  const hasBuyGoods    = txs.some(t => /buy goods|till number|merchant/i.test(t.description));
+  const hasPayBill     = txs.some(t => /pay bill|paybill|lipa na mpesa/i.test(t.description));
+  const activityCount  = [hasDeposits, hasWithdrawals, hasSendMoney, hasBuyGoods, hasPayBill].filter(Boolean).length;
+  let S7: number;
+  if      (activityCount >= 5) S7 = 5;
+  else if (activityCount >= 4) S7 = 4;
+  else if (activityCount >= 3) S7 = 3;
+  else if (activityCount >= 2) S7 = 2;
+  else                          S7 = 1;
+
+  // ── S8: Revenue Growth Trend (3 pts) ────────────────────────────────────────
+  let S8 = 1;
+  if (months.length >= 3) {
+    const half       = Math.max(1, Math.floor(months.length / 2));
+    const firstHalf  = monthlyIncomeAmounts.slice(0, half);
+    const secondHalf = monthlyIncomeAmounts.slice(months.length - half);
+    const firstAvg   = firstHalf.reduce((s, x) => s + x, 0) / firstHalf.length;
+    const secondAvg  = secondHalf.reduce((s, x) => s + x, 0) / secondHalf.length;
+    const growthRate = firstAvg === 0 ? 0 : (secondAvg - firstAvg) / firstAvg;
+    if      (growthRate >  0.05) S8 = 3;
+    else if (growthRate >= -0.05) S8 = 2;
+    else                          S8 = 1;
+  }
+
+  // ── Risk Factors (−10 max penalty) ──────────────────────────────────────────
+  let penalty = 0;
+  if      (inactiveMonths >= 2) penalty += 4;
+  else if (inactiveMonths === 1) penalty += 2;
+
+  const crashMonths = monthlyIncomeAmounts.filter(m => avgMonthlyIncome > 0 && m < avgMonthlyIncome * 0.20 && m > 0).length;
+  if      (crashMonths >= 2) penalty += 3;
+  else if (crashMonths === 1) penalty += 1;
+
+  const spikeMonths = monthlyIncomeAmounts.filter(m => avgMonthlyIncome > 0 && m > avgMonthlyIncome * 5).length;
+  if (spikeMonths >= 1) penalty += 2;
+
+  if      (debtRatio > 0.35) penalty += 3;
+  else if (debtRatio > 0.20) penalty += 1;
+
+  const riskPenalty = Math.min(10, penalty);
+
+  // ── Final score ──────────────────────────────────────────────────────────────
+  const rawScore   = S1 + S2 + S3 + S4 + S5 + S6 + S7 + S8 - riskPenalty;
+  const finalScore = Math.max(0, Math.min(100, rawScore));
 
   const { grade, label, limitMult } = gradeFor(finalScore);
   const creditLimit = Math.round(avgMonthlyIncome * limitMult);
 
-  const riskLevel = finalScore >= 80 ? "Low" : finalScore >= 65 ? "Medium" : finalScore >= 45 ? "High" : "Very High";
-  const recommendation = finalScore >= 80 ? "Approve" : finalScore >= 65 ? "Approve with conditions"
-    : finalScore >= 45 ? "Further review required" : "Decline";
+  const riskLevel = finalScore >= 85 ? "Low"
+    : finalScore >= 70 ? "Low-Medium"
+    : finalScore >= 55 ? "Medium"
+    : finalScore >= 40 ? "High"
+    : "Very High";
 
-  const incomeByMonth = months.map(m => ({
-    month: m, amount: monthMap[m].income, count: monthMap[m].incomeCount,
-  }));
+  const recommendation = finalScore >= 85 ? "Approve"
+    : finalScore >= 70 ? "Approve with conditions"
+    : finalScore >= 55 ? "Further review required"
+    : finalScore >= 40 ? "Caution — review required"
+    : "Decline";
+
+  // ── Monthly / daily income ───────────────────────────────────────────────────
+  const incomeByMonth = months.map(m => ({ month: m, amount: monthMap[m].income, count: monthMap[m].incomeCount }));
   const peak   = incomeByMonth.reduce((a, b) => b.amount > a.amount ? b : a, incomeByMonth[0] ?? { month: "", amount: 0, count: 0 });
   const lowest = incomeByMonth.reduce((a, b) => b.amount < a.amount ? b : a, incomeByMonth[0] ?? { month: "", amount: 0, count: 0 });
-
-  const factors = [
-    { name: "Cash Flow Strength",     score: F1, weight: 35, impact: impactOf(F1), detail: `Ratio ${cashFlowRatio.toFixed(2)} — income KES ${fmt(totalIncome)} vs spending KES ${fmt(totalExpenditure)}` },
-    { name: "Income Stability",       score: F2, weight: 20, impact: impactOf(F2), detail: `CV=${cv.toFixed(2)} across ${monthCount} month${monthCount !== 1 ? "s" : ""} (lower is better)` },
-    { name: "Income Frequency",       score: F3, weight: 15, impact: impactOf(F3), detail: `Avg ${avgIncomePerMonth.toFixed(1)} income transactions/month` },
-    { name: "Debt Burden",            score: F4, weight: 15, impact: impactOf(F4), detail: `${debtCount} loan/Fuliza event${debtCount !== 1 ? "s" : ""}, ${(debtRatio * 100).toFixed(1)}% of income` },
-    { name: "Statement Coverage",     score: F5, weight: 5,  impact: impactOf(F5), detail: `${monthCount} month${monthCount !== 1 ? "s" : ""} of history` },
-    { name: "Financial Discipline",   score: F6, weight: 5,  impact: impactOf(F6), detail: `${savingsCount} savings event${savingsCount !== 1 ? "s" : ""}; bills paid in ${monthsWithBills}/${monthCount} months` },
-    { name: "Income Diversification", score: F7, weight: 5,  impact: impactOf(F7), detail: `${incomeSourceCount} distinct income source${incomeSourceCount !== 1 ? "s" : ""} detected` },
-  ] as const;
 
   const dayMap: Record<string, { sum: number; count: number }> = {};
   for (const t of credits) {
@@ -424,12 +519,28 @@ function computeScore(txs: RawTransaction[]) {
     dayMap[t.date].sum   += t.amount;
     dayMap[t.date].count += 1;
   }
-  const dailyIncome = Object.keys(dayMap).sort().map(d => ({
-    date: d, amount: round2(dayMap[d].sum), transactionCount: dayMap[d].count,
-  }));
-  const monthlyIncome = incomeByMonth.map(m => ({
-    month: m.month, label: monthLabel(m.month), amount: round2(m.amount), transactionCount: m.count,
-  }));
+  const dailyIncome   = Object.keys(dayMap).sort().map(d => ({ date: d, amount: round2(dayMap[d].sum), transactionCount: dayMap[d].count }));
+  const monthlyIncome = incomeByMonth.map(m => ({ month: m.month, label: monthLabel(m.month), amount: round2(m.amount), transactionCount: m.count }));
+
+  // ── Factors array ────────────────────────────────────────────────────────────
+  const riskDesc = [
+    inactiveMonths >= 1 ? `${inactiveMonths} inactive month${inactiveMonths > 1 ? "s" : ""}` : null,
+    crashMonths >= 1    ? "revenue crashes" : null,
+    spikeMonths >= 1    ? "suspicious spikes" : null,
+    debtRatio > 0.20    ? "high loan reliance" : null,
+  ].filter(Boolean).join(", ");
+
+  const factors: ScoreFactor[] = [
+    { name: "Cash Flow Consistency",  score: Math.round((S1 / 28) * 100), weight: 28, impact: impactOf(Math.round((S1 / 28) * 100)), detail: `CV=${cv.toFixed(2)} — ${inactiveMonths} inactive month${inactiveMonths !== 1 ? "s" : ""} out of ${monthCount}` },
+    { name: "Monthly Turnover",       score: Math.round((S2 / 17) * 100), weight: 17, impact: impactOf(Math.round((S2 / 17) * 100)), detail: `Avg KES ${fmt(avgMonthlyIncome)}/month` },
+    { name: "Transaction Frequency",  score: Math.round((S3 / 17) * 100), weight: 17, impact: impactOf(Math.round((S3 / 17) * 100)), detail: `Avg ${avgIncomePerMonth.toFixed(1)} income transactions/month` },
+    { name: "Business Age",           score: Math.round((S4 / 10) * 100), weight: 10, impact: impactOf(Math.round((S4 / 10) * 100)), detail: `${Math.round(monthsCovered)} month${Math.round(monthsCovered) !== 1 ? "s" : ""} of statement history` },
+    { name: "Active Days per Month",  score: Math.round((S5 / 10) * 100), weight: 10, impact: impactOf(Math.round((S5 / 10) * 100)), detail: `Avg ${avgActiveDays.toFixed(1)} active days/month` },
+    { name: "Repayment History",      score: Math.round((S6 / 10) * 100), weight: 10, impact: impactOf(Math.round((S6 / 10) * 100)), detail: `${debtCount} loan/Fuliza event${debtCount !== 1 ? "s" : ""} — ${(debtRatio * 100).toFixed(1)}% of income` },
+    { name: "M-Pesa Account Activity",score: Math.round((S7 / 5)  * 100), weight: 5,  impact: impactOf(Math.round((S7 / 5)  * 100)), detail: `${activityCount} of 5 M-Pesa activity types used` },
+    { name: "Revenue Growth Trend",   score: Math.round((S8 / 3)  * 100), weight: 3,  impact: S8 === 3 ? "positive" : S8 === 2 ? "neutral" : "negative", detail: S8 === 3 ? "Positive revenue growth" : S8 === 2 ? "Stable revenue" : "Revenue declining" },
+    ...(riskPenalty > 0 ? [{ name: "Risk Factors", score: Math.round(((10 - riskPenalty) / 10) * 100), weight: -riskPenalty, impact: "negative" as const, detail: `−${riskPenalty} pts: ${riskDesc}` }] : []),
+  ];
 
   return {
     metrics: {
@@ -441,7 +552,7 @@ function computeScore(txs: RawTransaction[]) {
       periodStart: txs.find(t => t.date)?.date ?? "",
       periodEnd: [...txs].reverse().find(t => t.date)?.date ?? "",
       peakIncomeMonth: peak.month, lowestIncomeMonth: lowest.month, cv,
-      monthsWithBills,
+      monthsWithBills, avgActiveDays, riskPenalty, inactiveMonths,
     },
     score: { finalScore, grade, label, creditLimit, riskLevel, recommendation, factors },
     dailyIncome,
@@ -457,106 +568,109 @@ function generateInsights(
 ): BehavioralInsight[] {
   const insights: BehavioralInsight[] = [];
 
-  // 1. Cash flow
-  if (metrics.cashFlowRatio >= 1.5) {
-    insights.push({
-      type: "positive",
-      title: "Strong positive cash flow ratio",
-      description: `Total income of KES ${fmt(metrics.totalIncome)} comfortably exceeds spending of KES ${fmt(metrics.totalExpenditure)}, yielding a cash flow ratio of ${metrics.cashFlowRatio.toFixed(2)}. This surplus indicates reliable capacity to service credit obligations.`,
-    });
-  } else if (metrics.cashFlowRatio >= 1.0) {
-    insights.push({
-      type: "warning",
-      title: "Slim cash flow margin detected",
-      description: `Income of KES ${fmt(metrics.totalIncome)} barely exceeds spending of KES ${fmt(metrics.totalExpenditure)} (ratio ${metrics.cashFlowRatio.toFixed(2)}). Any income disruption could create repayment difficulty.`,
-    });
-  } else {
-    insights.push({
-      type: "negative",
-      title: "Expenditure exceeds income",
-      description: `Spending of KES ${fmt(metrics.totalExpenditure)} exceeds income of KES ${fmt(metrics.totalIncome)} (ratio ${metrics.cashFlowRatio.toFixed(2)}). This pattern is unsustainable and signals significant financial stress.`,
-    });
-  }
-
-  // 2. Income stability
-  const cvPct = (metrics.cv * 100).toFixed(0);
-  if (metrics.cv <= 0.20) {
+  // 1. Cash flow consistency
+  if (metrics.cv <= 0.20 && metrics.inactiveMonths === 0) {
     insights.push({
       type: "positive",
       title: "Highly consistent monthly income",
-      description: `Monthly income is stable with only ${cvPct}% variation across ${metrics.monthCount} months, averaging KES ${fmt(metrics.avgMonthlyIncome)}/month. Predictable earnings strongly support reliable loan repayment.`,
+      description: `Monthly business income is stable — only ${(metrics.cv * 100).toFixed(0)}% variation across ${metrics.monthCount} months, averaging KES ${fmt(metrics.avgMonthlyIncome)}/month. Consistent inflows strongly support loan repayment capacity.`,
     });
-  } else if (metrics.cv <= 0.55) {
+  } else if (metrics.inactiveMonths >= 2) {
+    insights.push({
+      type: "negative",
+      title: `${metrics.inactiveMonths} inactive months detected`,
+      description: `Business income was zero in ${metrics.inactiveMonths} of ${metrics.monthCount} months. Extended inactivity significantly increases repayment risk and reduces the credit score.`,
+    });
+  } else if (metrics.inactiveMonths === 1) {
     insights.push({
       type: "warning",
-      title: "Moderate income variability noted",
-      description: `Monthly income varies by ${cvPct}% around an average of KES ${fmt(metrics.avgMonthlyIncome)}/month over ${metrics.monthCount} months. Moderate fluctuations may affect repayment consistency.`,
+      title: "One inactive month detected",
+      description: `Business had no income in 1 of ${metrics.monthCount} months. Periodic inactivity can create cash flow gaps that may affect loan repayments.`,
+    });
+  } else {
+    insights.push({
+      type: "warning",
+      title: "Moderate income variability",
+      description: `Monthly income varies by ${(metrics.cv * 100).toFixed(0)}% around an average of KES ${fmt(metrics.avgMonthlyIncome)}/month over ${metrics.monthCount} months. More stable operations would improve the credit profile.`,
+    });
+  }
+
+  // 2. Transaction frequency
+  if (metrics.avgIncomePerMonth >= 20) {
+    insights.push({
+      type: "positive",
+      title: "High business transaction frequency",
+      description: `Averaging ${metrics.avgIncomePerMonth.toFixed(1)} income transactions per month demonstrates a busy, active business with a steady customer base — a strong creditworthiness signal.`,
+    });
+  } else if (metrics.avgIncomePerMonth >= 5) {
+    insights.push({
+      type: "warning",
+      title: "Moderate transaction frequency",
+      description: `Averaging ${metrics.avgIncomePerMonth.toFixed(1)} income transactions per month. Higher activity levels would further demonstrate business viability and repayment capacity.`,
     });
   } else {
     insights.push({
       type: "negative",
-      title: "Highly irregular income pattern",
-      description: `Income fluctuates by ${cvPct}% with an average of KES ${fmt(metrics.avgMonthlyIncome)}/month over ${metrics.monthCount} months. High irregularity poses an elevated repayment risk.`,
+      title: "Low transaction frequency",
+      description: `Only ${metrics.avgIncomePerMonth.toFixed(1)} income transactions per month on average — this limits confidence in regular business activity. More frequent transactions indicate stronger creditworthiness.`,
     });
   }
 
-  // 3. Debt burden
+  // 3. Repayment history
   if (metrics.debtCount === 0) {
     insights.push({
       type: "positive",
       title: "No mobile loan activity detected",
-      description: `No Fuliza, M-Shwari, KCB M-Pesa, or Okoa Jahazi events found over the ${metrics.monthCount}-month period. The customer is not reliant on short-term mobile credit, indicating self-sufficient cash management.`,
+      description: `No Fuliza, M-Shwari, KCB M-Pesa, or Okoa Jahazi events found over ${metrics.monthCount} months. Self-sufficient cash management without reliance on mobile credit is a strong indicator of financial discipline.`,
     });
   } else {
     const debtPct = (metrics.debtRatio * 100).toFixed(1);
     insights.push({
       type: metrics.debtRatio > 0.20 ? "negative" : "warning",
       title: `${metrics.debtCount} mobile loan event${metrics.debtCount !== 1 ? "s" : ""} detected`,
-      description: `Loan/Fuliza activity represents ${debtPct}% of total income (KES ${fmt(metrics.totalIncome)}). ${metrics.debtRatio > 0.20 ? "This elevated debt burden may impair repayment capacity for new credit." : "Debt usage is within manageable limits but should be monitored."}`,
+      description: `Loan/Fuliza activity represents ${debtPct}% of business income. ${metrics.debtRatio > 0.20 ? "High reliance on mobile credit may impair the ability to service new credit obligations." : "Debt usage is within manageable limits but should be monitored carefully."}`,
     });
   }
 
-  // 4. Savings / withdrawal discipline
-  if (metrics.savingsCount >= 3) {
+  // 4. Active days per month
+  if (metrics.avgActiveDays >= 20) {
     insights.push({
       type: "positive",
-      title: "Active and consistent savings behaviour",
-      description: `${metrics.savingsCount} savings deposits (M-Shwari/Lock Savings) recorded over ${metrics.monthCount} months alongside an average monthly income of KES ${fmt(metrics.avgMonthlyIncome)}. Regular saving is a strong indicator of financial discipline.`,
+      title: "Business operates consistently throughout the month",
+      description: `Averaging ${metrics.avgActiveDays.toFixed(1)} active days per month demonstrates regular operations and a dependable, continuous income stream.`,
     });
-  } else if (metrics.maxWithdrawal > metrics.avgMonthlyIncome * 0.5 && metrics.avgMonthlyIncome > 0) {
+  } else if (metrics.avgActiveDays >= 15) {
     insights.push({
       type: "warning",
-      title: "Large single withdrawal flagged",
-      description: `A single withdrawal of KES ${fmt(metrics.maxWithdrawal)} represents ${((metrics.maxWithdrawal / metrics.avgMonthlyIncome) * 100).toFixed(0)}% of the average monthly income of KES ${fmt(metrics.avgMonthlyIncome)}. Large irregular withdrawals can destabilise cash flow.`,
+      title: "Moderate daily business activity",
+      description: `${metrics.avgActiveDays.toFixed(1)} active transaction days per month on average. Increasing operational frequency would strengthen the creditworthiness profile.`,
+    });
+  } else {
+    insights.push({
+      type: "negative",
+      title: "Low daily activity levels",
+      description: `Only ${metrics.avgActiveDays.toFixed(1)} active days per month on average. Infrequent operations suggest limited business activity and reduce confidence in steady cash flow.`,
+    });
+  }
+
+  // 5. Risk factors summary or overall profile
+  if (metrics.riskPenalty >= 5) {
+    insights.push({
+      type: "negative",
+      title: "Significant risk factors detected",
+      description: `A penalty of ${metrics.riskPenalty} points was applied due to: long inactivity periods, revenue crashes, suspicious transaction spikes, or high loan reliance. These factors materially reduce the credit score.`,
+    });
+  } else if (score.finalScore >= 70) {
+    insights.push({
+      type: "positive",
+      title: "Healthy overall business financial profile",
+      description: `Score of ${score.finalScore}/100 (${score.label}) — average monthly turnover of KES ${fmt(metrics.avgMonthlyIncome)} supports a recommended credit limit of KES ${fmt(score.creditLimit)}.`,
     });
   } else {
     insights.push({
       type: "warning",
-      title: "Limited savings activity observed",
-      description: `Only ${metrics.savingsCount} savings event${metrics.savingsCount !== 1 ? "s" : ""} detected over ${metrics.monthCount} months. Building a regular savings habit would meaningfully improve future creditworthiness assessments.`,
-    });
-  }
-
-  // 5. Income diversification & frequency
-  const billCoverage = metrics.monthCount > 0 ? ((metrics.monthsWithBills / metrics.monthCount) * 100).toFixed(0) : "0";
-  if (metrics.incomeSourceCount >= 3) {
-    insights.push({
-      type: "positive",
-      title: "Diversified income sources detected",
-      description: `${metrics.incomeSourceCount} distinct income sources identified with ${metrics.avgIncomePerMonth.toFixed(1)} income transactions/month. Multiple payers reduce concentration risk and support stable repayment capacity.`,
-    });
-  } else if (metrics.monthsWithBills >= Math.ceil(metrics.monthCount * 0.6) && metrics.monthCount >= 2) {
-    insights.push({
-      type: "positive",
-      title: "Consistent bill payment behaviour",
-      description: `Bill payments recorded in ${metrics.monthsWithBills} of ${metrics.monthCount} months (${billCoverage}% coverage). Regular paybill and buy-goods activity shows financial responsibility and organised payment habits.`,
-    });
-  } else {
-    const diversityType = metrics.incomeSourceCount <= 1 ? "negative" : "warning" as const;
-    insights.push({
-      type: diversityType,
-      title: "Limited income diversification",
-      description: `Only ${metrics.incomeSourceCount} income source${metrics.incomeSourceCount !== 1 ? "s" : ""} detected over ${metrics.monthCount} months. Concentration in a single payer increases vulnerability to income disruption.`,
+      title: "Profile requires improvement",
+      description: `Score of ${score.finalScore}/100 (${score.label}). Improving transaction frequency, maintaining consistent monthly income, and reducing mobile loan dependency would significantly boost future assessments.`,
     });
   }
 
@@ -579,10 +693,11 @@ function daySpan(txs: RawTransaction[]) {
 }
 
 function gradeFor(score: number): { grade: string; label: string; limitMult: number } {
-  if (score >= 80) return { grade: "A", label: "Excellent Credit", limitMult: 4.0 };
-  if (score >= 60) return { grade: "B", label: "Good Credit",      limitMult: 2.5 };
-  if (score >= 50) return { grade: "C", label: "Fair Credit",      limitMult: 1.0 };
-  return             { grade: "D", label: "Poor Credit",      limitMult: 0.3 };
+  if (score >= 85) return { grade: "A", label: "Excellent",       limitMult: 0.275 }; // 25–30% of avg monthly turnover
+  if (score >= 70) return { grade: "B", label: "Good",            limitMult: 0.20  }; // 15–25%
+  if (score >= 55) return { grade: "C", label: "Fair",            limitMult: 0.125 }; // 10–15%
+  if (score >= 40) return { grade: "D", label: "Review Required", limitMult: 0.075 }; // 5–10%
+  return               { grade: "E", label: "High Risk",          limitMult: 0     }; // no credit
 }
 
 function monthLabel(ym: string) {
@@ -758,14 +873,14 @@ Rules:
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 router.post("/analyze/mpesa", async (req, res) => {
-  const { text } = req.body as { text?: string };
+  const { text, paymentMethod = "sendmoney" } = req.body as { text?: string; paymentMethod?: string };
   if (!text || typeof text !== "string" || text.trim().length < 10) {
     res.status(400).json({ error: "No valid PDF text content provided." });
     return;
   }
 
   try {
-    // ── Step 1: Parse individual transactions (for monthly/daily breakdown) ──
+    // ── Step 1: Parse transactions ────────────────────────────────────────────
     let transactions = dedup(parseTransactions(text.trim()));
     transactions.sort((a, b) => a.date.localeCompare(b.date));
 
@@ -776,28 +891,32 @@ router.post("/analyze/mpesa", async (req, res) => {
       return;
     }
 
-    // ── Step 2: AI extracts authoritative totals from the summary section ────
-    // Run AI extraction and transaction scoring in parallel
+    // ── Step 2: Score (with payment-method income filter) + AI summary ────────
     const [aiSummary, scored] = await Promise.all([
       extractSummaryWithAI(text),
-      Promise.resolve(computeScore(transactions)),
+      Promise.resolve(computeScore(transactions, paymentMethod)),
     ]);
 
     const { metrics, score, dailyIncome, monthlyIncome } = scored;
 
-    // ── Step 3: Use AI-extracted summary figures as the authoritative source ──
-    // paidIn → totalIncome, paidOut → totalExpenditure, all derived values
-    // (netCashFlow, cashFlowRatio, averages) come directly from OpenAI.
-    // Rule-based metrics are used only as fallback when AI is unavailable.
-    const totalIncome          = aiSummary?.paidIn              ?? metrics.totalIncome;
+    // ── Step 3: Resolve totals ─────────────────────────────────────────────────
+    // For sendmoney: AI statement-level totals are authoritative.
+    // For filtered methods (paybill/till/bank): use the already-filtered
+    //   metrics.totalIncome; AI still provides expenditure & period info.
+    const totalIncome = paymentMethod === "sendmoney"
+      ? (aiSummary?.paidIn ?? metrics.totalIncome)
+      : metrics.totalIncome;
     const totalExpenditure     = aiSummary?.paidOut             ?? metrics.totalExpenditure;
-    const netCashFlow          = aiSummary?.netCashFlow         ?? round2(totalIncome - totalExpenditure);
-    const cashFlowRatio        = aiSummary?.cashFlowRatio       ?? (totalExpenditure === 0 ? 2.0 : round2(totalIncome / totalExpenditure));
+    const netCashFlow          = round2(totalIncome - totalExpenditure);
+    const cashFlowRatio        = totalExpenditure === 0 ? 2.0 : round2(totalIncome / totalExpenditure);
     const monthCount           = aiSummary?.monthCount          ?? (metrics.monthCount || 1);
-    const averageMonthlyIncome = aiSummary?.averageMonthlyIncome ?? round2(totalIncome / monthCount);
-    const averageDailyIncome   = aiSummary?.averageDailyIncome  ?? round2(totalIncome / Math.max(daySpan(transactions), 1));
+    const averageMonthlyIncome = paymentMethod === "sendmoney"
+      ? (aiSummary?.averageMonthlyIncome ?? round2(totalIncome / monthCount))
+      : round2(totalIncome / monthCount);
+    const averageDailyIncome   = paymentMethod === "sendmoney"
+      ? (aiSummary?.averageDailyIncome ?? round2(totalIncome / Math.max(daySpan(transactions), 1)))
+      : round2(totalIncome / Math.max(daySpan(transactions), 1));
 
-    // Override credit limit using AI-sourced average monthly income
     const { grade, label, limitMult } = gradeFor(score.finalScore);
     const creditLimit = Math.round(averageMonthlyIncome * limitMult);
 
@@ -823,19 +942,21 @@ router.post("/analyze/mpesa", async (req, res) => {
     const insights = generateInsights(correctedMetrics, score);
 
     // ── Step 5: Build reasoning string ────────────────────────────────────────
+    const pmLabel = paymentMethod === "paybill" ? "M-Pesa PayBill"
+      : paymentMethod === "tillnumber"  ? "Till Number (Buy Goods)"
+      : paymentMethod === "bankpaybill" ? "Bank PayBill"
+      : "Send Money / Pochi la Biashara";
+
     const reasoning =
-      `${grade} grade: cash flow ratio of ${cashFlowRatio.toFixed(2)} ` +
-      `(income KES ${fmt(totalIncome)} vs spending KES ${fmt(totalExpenditure)}) ` +
+      `${grade} grade (${score.finalScore}/100) — ${pmLabel}: ` +
+      `income KES ${fmt(totalIncome)} vs spending KES ${fmt(totalExpenditure)} ` +
       `over ${monthCount} month${monthCount !== 1 ? "s" : ""}, ` +
-      `averaging KES ${fmt(averageMonthlyIncome)}/month. ` +
+      `avg KES ${fmt(averageMonthlyIncome)}/month. ` +
       (metrics.debtCount > 0
-        ? `${metrics.debtCount} loan/Fuliza event${metrics.debtCount > 1 ? "s" : ""} ` +
-          `represent ${(metrics.debtRatio * 100).toFixed(1)}% of income. `
-        : "No loan or Fuliza activity detected. ") +
-      (metrics.savingsCount > 0
-        ? `${metrics.savingsCount} savings event${metrics.savingsCount > 1 ? "s" : ""} noted.`
-        : "No savings activity detected.") +
-      (aiSummary ? " (Figures sourced from statement summary.)" : "");
+        ? `${metrics.debtCount} loan/Fuliza event${metrics.debtCount > 1 ? "s" : ""} (${(metrics.debtRatio * 100).toFixed(1)}% of income). `
+        : "No loan or Fuliza activity. ") +
+      (metrics.riskPenalty > 0 ? `Risk penalty: −${metrics.riskPenalty} pts. ` : "") +
+      (aiSummary ? "(Statement summary figures used.)" : "");
 
     // Recent transactions (last 20, newest first)
     const recentTransactions = [...transactions]
