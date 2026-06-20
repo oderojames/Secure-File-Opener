@@ -142,10 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const sendPasswordReset = async (email: string) => {
-    await sendPasswordResetEmail(auth, email, {
-      url: window.location.origin,
-      handleCodeInApp: false,
-    });
+    await sendPasswordResetEmail(auth, email);
   };
 
   const deleteAccount = async (password: string) => {
