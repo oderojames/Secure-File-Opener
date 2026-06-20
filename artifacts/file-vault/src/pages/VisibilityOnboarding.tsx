@@ -3,7 +3,7 @@ import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ShieldCheck, Globe, Building2, Search, CheckSquare, Square, Loader2, ChevronRight } from 'lucide-react';
+import { ShieldCheck, Globe, Building2, Users2, Search, CheckSquare, Square, Loader2, ChevronRight } from 'lucide-react';
 
 interface Wholesaler {
   uid: string;
@@ -14,13 +14,21 @@ interface Wholesaler {
 interface Props {
   uid: string;
   isEditing?: boolean;
-  initialOption?: 'public' | 'private';
+  initialOption?: 'public' | 'private' | 'sameBusiness';
   initialSelected?: string[];
-  onComplete: (pref: 'public' | 'private', allowedWholesalers: string[]) => void;
+  retailerBusinessType?: string;
+  onComplete: (pref: 'public' | 'private' | 'sameBusiness', allowedWholesalers: string[]) => void;
 }
 
-export default function VisibilityOnboarding({ uid, isEditing = false, initialOption, initialSelected = [], onComplete }: Props) {
-  const [option, setOption] = useState<'public' | 'private' | null>(initialOption ?? null);
+export default function VisibilityOnboarding({
+  uid,
+  isEditing = false,
+  initialOption,
+  initialSelected = [],
+  retailerBusinessType = '',
+  onComplete,
+}: Props) {
+  const [option, setOption] = useState<'public' | 'private' | 'sameBusiness' | null>(initialOption ?? null);
   const [wholesalers, setWholesalers] = useState<Wholesaler[]>([]);
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set(initialSelected));
@@ -39,7 +47,6 @@ export default function VisibilityOnboarding({ uid, isEditing = false, initialOp
     }
   }, [option]);
 
-  // When editing with private pre-selected, sync new initialSelected into state
   useEffect(() => {
     if (isEditing && initialOption === 'private') {
       setSelected(new Set(initialSelected));
@@ -64,7 +71,7 @@ export default function VisibilityOnboarding({ uid, isEditing = false, initialOp
     if (!option) return;
     setSaving(true);
     try {
-      const allowedList = option === 'public' ? [] : Array.from(selected);
+      const allowedList = option === 'private' ? Array.from(selected) : [];
       await updateDoc(doc(db, 'users', uid), {
         visibilityPreference: option,
         allowedWholesalers: allowedList,
@@ -75,13 +82,55 @@ export default function VisibilityOnboarding({ uid, isEditing = false, initialOp
     }
   };
 
-  const canConfirm = option === 'public' || (option === 'private' && selected.size > 0);
+  const canConfirm =
+    option === 'public' ||
+    option === 'sameBusiness' ||
+    (option === 'private' && selected.size > 0);
+
+  const optionCard = (
+    value: 'public' | 'private' | 'sameBusiness',
+    icon: React.ReactNode,
+    activeIcon: React.ReactNode,
+    title: string,
+    description: string,
+    extra?: React.ReactNode,
+  ) => (
+    <button
+      onClick={() => setOption(value)}
+      className={`w-full text-left rounded-xl border-2 p-4 transition-all ${
+        option === value
+          ? 'border-primary bg-primary/10'
+          : 'border-border bg-card hover:border-primary/40 hover:bg-muted/30'
+      }`}
+    >
+      <div className="flex items-start gap-4">
+        <div className={`mt-0.5 w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+          option === value ? 'bg-primary/25 border border-primary/40' : 'bg-muted border border-border'
+        }`}>
+          {option === value ? activeIcon : icon}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between">
+            <p className="font-semibold text-sm text-foreground">{title}</p>
+            {option === value && (
+              <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center shrink-0">
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                  <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">{description}</p>
+          {extra}
+        </div>
+      </div>
+    </button>
+  );
 
   return (
     <div className="flex-1 overflow-y-auto flex flex-col items-center justify-start sm:justify-center p-4 sm:p-8">
       <div className="w-full max-w-lg py-4">
 
-        {/* Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary/20 border border-primary/30 mb-4">
             <ShieldCheck size={28} className="text-primary" />
@@ -96,77 +145,35 @@ export default function VisibilityOnboarding({ uid, isEditing = false, initialOp
           </p>
         </div>
 
-        {/* Options */}
         <div className="space-y-3 mb-6">
 
-          {/* Public option */}
-          <button
-            onClick={() => setOption('public')}
-            className={`w-full text-left rounded-xl border-2 p-4 transition-all ${
-              option === 'public'
-                ? 'border-primary bg-primary/10'
-                : 'border-border bg-card hover:border-primary/40 hover:bg-muted/30'
-            }`}
-          >
-            <div className="flex items-start gap-4">
-              <div className={`mt-0.5 w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                option === 'public' ? 'bg-primary/25 border border-primary/40' : 'bg-muted border border-border'
-              }`}>
-                <Globe size={20} className={option === 'public' ? 'text-primary' : 'text-muted-foreground'} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between">
-                  <p className="font-semibold text-sm text-foreground">Available to all wholesalers</p>
-                  {option === 'public' && (
-                    <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center shrink-0">
-                      <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-                        <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Any wholesaler using Doyang can view your trust score on their dashboard.
-                </p>
-              </div>
-            </div>
-          </button>
+          {optionCard(
+            'public',
+            <Globe size={20} className="text-muted-foreground" />,
+            <Globe size={20} className="text-primary" />,
+            'Available to all wholesalers',
+            'Any wholesaler using Doyang can view your trust score on their dashboard.',
+          )}
 
-          {/* Private option */}
-          <button
-            onClick={() => setOption('private')}
-            className={`w-full text-left rounded-xl border-2 p-4 transition-all ${
-              option === 'private'
-                ? 'border-primary bg-primary/10'
-                : 'border-border bg-card hover:border-primary/40 hover:bg-muted/30'
-            }`}
-          >
-            <div className="flex items-start gap-4">
-              <div className={`mt-0.5 w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                option === 'private' ? 'bg-primary/25 border border-primary/40' : 'bg-muted border border-border'
-              }`}>
-                <Building2 size={20} className={option === 'private' ? 'text-primary' : 'text-muted-foreground'} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between">
-                  <p className="font-semibold text-sm text-foreground">Share with specific wholesalers</p>
-                  {option === 'private' && (
-                    <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center shrink-0">
-                      <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-                        <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Only wholesalers you choose can see your credit reports.
-                </p>
-              </div>
-            </div>
-          </button>
+          {optionCard(
+            'sameBusiness',
+            <Users2 size={20} className="text-muted-foreground" />,
+            <Users2 size={20} className="text-primary" />,
+            'Wholesalers in my business type',
+            retailerBusinessType
+              ? `Only wholesalers in "${retailerBusinessType}" can view your credit reports.`
+              : 'Only wholesalers registered in the same business field as you can view your reports.',
+          )}
+
+          {optionCard(
+            'private',
+            <Building2 size={20} className="text-muted-foreground" />,
+            <Building2 size={20} className="text-primary" />,
+            'Share with specific wholesalers',
+            'Only wholesalers you choose can see your credit reports.',
+          )}
         </div>
 
-        {/* Wholesaler picker (expands when 'private' selected) */}
         {option === 'private' && (
           <div className="bg-card border border-border rounded-xl overflow-hidden mb-6">
             <div className="p-3 border-b border-border">
@@ -221,7 +228,6 @@ export default function VisibilityOnboarding({ uid, isEditing = false, initialOp
           </div>
         )}
 
-        {/* Confirm */}
         <Button
           onClick={handleConfirm}
           disabled={!canConfirm || saving}

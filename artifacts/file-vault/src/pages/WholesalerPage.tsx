@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/contexts/AuthContext';
 import WholesalerAuthPage from '@/pages/WholesalerAuthPage';
-import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock, Calendar, Mail, CheckCircle2, Smartphone, CreditCard, ChevronRight, X } from 'lucide-react';
+import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock, Calendar, Mail, CheckCircle2, Smartphone, CreditCard, ChevronRight, X, Filter } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { collection, getDocs, query, where, doc, getDoc, setDoc } from 'firebase/firestore';
@@ -82,8 +82,9 @@ interface ReportSummary {
   label: string;
   periodStart?: string | null;
   periodEnd?: string | null;
-  visibility?: 'public' | 'private';
+  visibility?: 'public' | 'private' | 'sameBusiness';
   allowedWholesalers?: string[];
+  businessType?: string;
 }
 
 function scoreStyle(score: number) {
@@ -121,6 +122,8 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
 
   const [quota, setQuota]         = useState(FREE_QUOTA);
   const [quotaLoading, setQuotaLoading] = useState(true);
+  const [wholesalerBusinessType, setWholesalerBusinessType] = useState<string | null>(null);
+  const [businessTypeFilter, setBusinessTypeFilter] = useState(false);
 
   const [paymentOpen, setPaymentOpen]   = useState(false);
   const [selectedTier, setSelectedTier] = useState<typeof PAYMENT_TIERS[0] | null>(null);
@@ -141,9 +144,15 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
   useEffect(() => {
     const loadQuota = async () => {
       try {
-        const snap = await getDoc(doc(db, 'wholesaler_quotas', wholesalerUid));
-        if (snap.exists()) setQuota(snap.data().quota ?? FREE_QUOTA);
-      } catch {}
+        const [quotaSnap, userSnap] = await Promise.all([
+          getDoc(doc(db, 'wholesaler_quotas', wholesalerUid)),
+          getDoc(doc(db, 'users', wholesalerUid)),
+        ]);
+        if (quotaSnap.exists()) setQuota(quotaSnap.data().quota ?? FREE_QUOTA);
+        setWholesalerBusinessType(userSnap.data()?.businessType ?? '');
+      } catch {
+        setWholesalerBusinessType('');
+      }
       setQuotaLoading(false);
     };
     loadQuota();
@@ -153,13 +162,27 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
     try {
       setLoading(true);
       setError(null);
-      const [publicSnap, sharedSnap] = await Promise.all([
+      const bType = wholesalerBusinessType;
+      const baseQueries: Promise<any>[] = [
         getDocs(query(collection(db, 'retailer_reports'), where('visibility', '==', 'public'))),
         getDocs(query(collection(db, 'retailer_reports'), where('allowedWholesalers', 'array-contains', wholesalerUid))),
-      ]);
+      ];
+      if (bType) {
+        baseQueries.push(
+          getDocs(query(
+            collection(db, 'retailer_reports'),
+            where('visibility', '==', 'sameBusiness'),
+            where('businessType', '==', bType),
+          )).catch((e) => {
+            console.warn('[Doyang] sameBusiness query needs a Firestore composite index. Create it here:', e?.message?.match(/https[^\s]*/)?.[0] ?? 'https://console.firebase.google.com');
+            return { docs: [] };
+          })
+        );
+      }
+      const snaps = await Promise.all(baseQueries);
       const seen = new Set<string>();
       const combined: ReportSummary[] = [];
-      for (const snap of [publicSnap, sharedSnap]) {
+      for (const snap of snaps) {
         for (const d of snap.docs) {
           if (!seen.has(d.id)) { seen.add(d.id); combined.push(d.data() as ReportSummary); }
         }
@@ -172,7 +195,11 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
       setLoading(false);
     }
   };
-  useEffect(() => { fetchReports(); }, [wholesalerUid]);
+  useEffect(() => {
+    if (wholesalerBusinessType === null) return;
+    fetchReports();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wholesalerUid, wholesalerBusinessType]);
 
   useEffect(() => {
     if (paymentStep !== 'waiting') return;
@@ -247,8 +274,11 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
         return r.retailerName?.toLowerCase().includes(q) || r.customerName?.toLowerCase().includes(q);
       })
     : [];
-  const visibleReports = reports.slice(0, quota);
-  const lockedCount    = Math.max(0, reports.length - quota);
+  const displayReports = (businessTypeFilter && wholesalerBusinessType)
+    ? reports.filter(r => r.businessType === wholesalerBusinessType)
+    : reports;
+  const visibleReports = displayReports.slice(0, quota);
+  const lockedCount    = Math.max(0, displayReports.length - quota);
 
   if (loading || quotaLoading) {
     return (
@@ -274,15 +304,32 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
     <div className="flex-1 flex flex-col overflow-hidden">
 
       {/* Quota bar */}
-      <div className="px-4 sm:px-6 pt-4 pb-2 flex items-center gap-3">
-        <div className="flex-1 text-xs text-muted-foreground">
-          Showing <span className="font-semibold text-foreground">{Math.min(quota, reports.length)}</span> of{' '}
-          <span className="font-semibold text-foreground">{reports.length}</span> retailers · Slot limit:{' '}
+      <div className="px-4 sm:px-6 pt-4 pb-2 flex items-center gap-2 flex-wrap">
+        <div className="flex-1 text-xs text-muted-foreground min-w-0">
+          Showing <span className="font-semibold text-foreground">{Math.min(quota, displayReports.length)}</span> of{' '}
+          <span className="font-semibold text-foreground">{displayReports.length}</span> retailers · Slot limit:{' '}
           <span className="font-semibold text-amber-400">{quota}</span>
+          {businessTypeFilter && wholesalerBusinessType && (
+            <span className="ml-1 text-green-400">· filtered by field</span>
+          )}
         </div>
+        {wholesalerBusinessType && (
+          <button
+            onClick={() => setBusinessTypeFilter(f => !f)}
+            title={businessTypeFilter ? `Remove filter: ${wholesalerBusinessType}` : `Filter by my field: ${wholesalerBusinessType}`}
+            className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg border transition-colors shrink-0 ${
+              businessTypeFilter
+                ? 'bg-green-500/15 border-green-500/30 text-green-400 hover:bg-green-500/25'
+                : 'bg-muted/50 border-border text-muted-foreground hover:border-green-500/30 hover:text-green-400'
+            }`}
+          >
+            <Filter size={11} />
+            {businessTypeFilter ? 'My Field' : 'All Fields'}
+          </button>
+        )}
         <button
           onClick={openPayment}
-          className="flex items-center gap-1.5 text-xs font-semibold text-amber-400 hover:text-amber-300 transition-colors bg-amber-500/10 border border-amber-500/25 rounded-lg px-3 py-1.5"
+          className="flex items-center gap-1.5 text-xs font-semibold text-amber-400 hover:text-amber-300 transition-colors bg-amber-500/10 border border-amber-500/25 rounded-lg px-3 py-1.5 shrink-0"
         >
           <CreditCard size={12} /> Upgrade Slots
         </button>

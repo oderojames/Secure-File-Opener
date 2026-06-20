@@ -25,7 +25,7 @@ interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
   signInWithEmail: (email: string, password: string) => Promise<{ role: 'retailer' | 'wholesaler' }>;
-  signUpWithEmail: (name: string, email: string, password: string, role?: 'retailer' | 'wholesaler') => Promise<void>;
+  signUpWithEmail: (name: string, email: string, password: string, role?: 'retailer' | 'wholesaler', businessType?: string) => Promise<void>;
   signInWithGoogle: (role?: 'retailer' | 'wholesaler') => Promise<void>;
   signOut: () => Promise<void>;
   sendPasswordReset: (email: string) => Promise<void>;
@@ -36,7 +36,7 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-async function ensureUserDoc(user: User, role: 'retailer' | 'wholesaler' = 'retailer') {
+async function ensureUserDoc(user: User, role: 'retailer' | 'wholesaler' = 'retailer', businessType = '') {
   const ref = doc(db, 'users', user.uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
@@ -45,6 +45,7 @@ async function ensureUserDoc(user: User, role: 'retailer' | 'wholesaler' = 'reta
       email: user.email,
       displayName: user.displayName || '',
       role,
+      businessType,
       visibilityPreference: null,
       allowedWholesalers: [],
       createdAt: new Date().toISOString(),
@@ -59,6 +60,7 @@ async function ensureUserDoc(user: User, role: 'retailer' | 'wholesaler' = 'reta
       await setDoc(wsRef, {
         uid: user.uid,
         businessName: user.displayName || snap.data()?.displayName || '',
+        businessType: businessType || snap.data()?.businessType || '',
         email: user.email || '',
         createdAt: new Date().toISOString(),
       }).catch(() => {});
@@ -96,6 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await setDoc(wsRef, {
           uid: cred.user.uid,
           businessName: cred.user.displayName || snap?.data()?.displayName || '',
+          businessType: snap?.data()?.businessType || '',
           email: cred.user.email || '',
           createdAt: new Date().toISOString(),
         }).catch(() => {});
@@ -104,10 +107,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { role };
   };
 
-  const signUpWithEmail = async (name: string, email: string, password: string, role: 'retailer' | 'wholesaler' = 'retailer') => {
+  const signUpWithEmail = async (name: string, email: string, password: string, role: 'retailer' | 'wholesaler' = 'retailer', businessType = '') => {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     await updateProfile(cred.user, { displayName: name });
-    await ensureUserDoc(cred.user, role);
+    await ensureUserDoc(cred.user, role, businessType);
     await sendEmailVerification(cred.user).catch(() => {});
   };
 

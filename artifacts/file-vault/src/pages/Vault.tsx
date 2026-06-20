@@ -7,7 +7,7 @@ import {
   ShieldCheck, BadgeAlert, ThumbsUp, ThumbsDown, Minus,
   ArrowDownLeft, ArrowUpRight, Lightbulb, AlertTriangle, XCircle,
   Banknote, Phone, CreditCard, RefreshCw, ShoppingBag, Building2,
-  LogOut, Menu, X, Globe, Settings, Smartphone,
+  LogOut, Menu, X, Globe, Settings, Smartphone, Users2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -222,8 +222,9 @@ async function fsLoadAnalyses(uid: string): Promise<StoredAnalysis[]> {
 async function fsSaveAnalysis(
   uid: string,
   analysis: StoredAnalysis,
-  visibility: 'public' | 'private' = 'public',
+  visibility: 'public' | 'private' | 'sameBusiness' = 'public',
   allowedWholesalers: string[] = [],
+  businessType = '',
 ): Promise<void> {
   await setDoc(userDoc(uid, analysis.id), analysis);
   // Write a summary to the shared top-level collection for wholesaler access.
@@ -244,6 +245,7 @@ async function fsSaveAnalysis(
     periodEnd: analysis.result.summary?.periodEnd ?? null,
     visibility,
     allowedWholesalers: visibility === 'private' ? allowedWholesalers : [],
+    businessType,
   }).catch((err) => {
     console.warn('[fsSaveAnalysis] shared report write failed (non-fatal):', err?.code ?? err?.message);
   });
@@ -256,8 +258,9 @@ async function fsDeleteAnalysis(uid: string, id: string): Promise<void> {
 
 async function fsUpdateRetailerVisibility(
   uid: string,
-  visibility: 'public' | 'private',
+  visibility: 'public' | 'private' | 'sameBusiness',
   allowedWholesalers: string[],
+  businessType = '',
 ): Promise<void> {
   const snap = await getDocs(
     query(collection(db, 'retailer_reports'), where('retailerUid', '==', uid))
@@ -268,6 +271,7 @@ async function fsUpdateRetailerVisibility(
     batch.update(d.ref, {
       visibility,
       allowedWholesalers: visibility === 'private' ? allowedWholesalers : [],
+      businessType,
     });
   });
   await batch.commit();
@@ -324,8 +328,9 @@ export default function Vault() {
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [visibilityPref, setVisibilityPref] = useState<'public' | 'private' | null | 'loading'>('loading');
+  const [visibilityPref, setVisibilityPref] = useState<'public' | 'private' | 'sameBusiness' | null | 'loading'>('loading');
   const [allowedWholesalers, setAllowedWholesalers] = useState<string[]>([]);
+  const [businessType, setBusinessType] = useState('');
   const [showVisibilitySettings, setShowVisibilitySettings] = useState(false);
   const { toast } = useToast();
 
@@ -339,6 +344,7 @@ export default function Vault() {
       const pref = userSnap.data()?.visibilityPreference ?? null;
       setVisibilityPref(pref);
       setAllowedWholesalers(userSnap.data()?.allowedWholesalers ?? []);
+      setBusinessType(userSnap.data()?.businessType ?? '');
       setLoadingAnalyses(false);
     }).catch(() => {
       setVisibilityPref(null);
@@ -482,7 +488,12 @@ export default function Vault() {
         retailerName: user?.displayName || user?.email?.split('@')[0] || 'Retailer',
         retailerEmail: user?.email || '',
       };
-      await fsSaveAnalysis(uid, entry, visibilityPref === 'private' ? 'private' : 'public', allowedWholesalers);
+      await fsSaveAnalysis(
+        uid, entry,
+        visibilityPref === 'private' ? 'private' : visibilityPref === 'sameBusiness' ? 'sameBusiness' : 'public',
+        allowedWholesalers,
+        businessType,
+      );
       setAnalyses(prev => [entry, ...prev]);
       setSelectedId(entry.id);
       setPendingPdf(null);
@@ -710,6 +721,8 @@ export default function Vault() {
             <p className="text-[10px] text-muted-foreground/70 truncate mt-0.5 flex items-center gap-1">
               {visibilityPref === 'public'
                 ? <><Globe size={9} className="text-primary shrink-0" />Visible to all wholesalers</>
+                : visibilityPref === 'sameBusiness'
+                ? <><Users2 size={9} className="text-green-400 shrink-0" />Same business type only</>
                 : visibilityPref === 'private'
                 ? <><Building2 size={9} className="text-amber-400 shrink-0" />{allowedWholesalers.length} specific wholesaler{allowedWholesalers.length !== 1 ? 's' : ''}</>
                 : 'Tap to configure…'}
@@ -781,13 +794,14 @@ export default function Vault() {
             <VisibilityOnboarding
               uid={uid}
               isEditing={showVisibilitySettings}
-              initialOption={visibilityPref === 'public' || visibilityPref === 'private' ? visibilityPref : undefined}
+              retailerBusinessType={businessType}
+              initialOption={visibilityPref === 'public' || visibilityPref === 'private' || visibilityPref === 'sameBusiness' ? visibilityPref : undefined}
               initialSelected={allowedWholesalers}
               onComplete={async (pref, allowed) => {
                 setVisibilityPref(pref);
                 setAllowedWholesalers(allowed);
                 setShowVisibilitySettings(false);
-                await fsUpdateRetailerVisibility(uid, pref, allowed);
+                await fsUpdateRetailerVisibility(uid, pref, allowed, businessType);
               }}
             />
           </div>

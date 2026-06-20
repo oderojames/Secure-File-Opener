@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useLocation } from 'wouter';
-import { Building2, Mail, Lock, User, Eye, EyeOff, AlertCircle } from 'lucide-react';
+import { Building2, Mail, Lock, User, Eye, EyeOff, AlertCircle, Tag } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/contexts/AuthContext';
+import { BUSINESS_TYPES } from '@/lib/businessTypes';
 
 type Tab = 'signin' | 'signup';
 
@@ -14,6 +15,7 @@ export default function WholesalerAuthPage() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [businessType, setBusinessType] = useState('');
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +71,8 @@ export default function WholesalerAuthPage() {
     try {
       if (tab === 'signup') {
         if (!name.trim()) { setError('Please enter your name.'); setLoading(false); return; }
-        await signUpWithEmail(name.trim(), email, password, 'wholesaler');
+        if (!businessType) { setError('Please select a business type.'); setLoading(false); return; }
+        await signUpWithEmail(name.trim(), email, password, 'wholesaler', businessType);
       } else {
         const { role } = await signInWithEmail(email, password);
         if (role === 'retailer') {
@@ -88,15 +91,11 @@ export default function WholesalerAuthPage() {
   return (
     <div className="min-h-screen w-full bg-background flex items-center justify-center p-4">
 
-      {/* Background subtle grid */}
       <div className="absolute inset-0 bg-[linear-gradient(hsl(220_15%_10%/0.8)_1px,transparent_1px),linear-gradient(90deg,hsl(220_15%_10%/0.8)_1px,transparent_1px)] bg-[size:40px_40px] opacity-40 pointer-events-none" />
-
-      {/* Glow */}
       <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
 
       <div className="relative w-full max-w-md">
 
-        {/* Logo / brand */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-amber-500/20 border border-amber-500/30 mb-4">
             <Building2 size={28} className="text-amber-400" />
@@ -105,10 +104,8 @@ export default function WholesalerAuthPage() {
           <p className="text-sm text-muted-foreground mt-1">Wholesaler Portal · M-Pesa Creditworthiness</p>
         </div>
 
-        {/* Card */}
         <div className="bg-card border border-border rounded-2xl p-8 shadow-2xl">
 
-          {/* Role badge */}
           <div className="flex justify-center mb-6">
             <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/25 text-xs font-semibold text-amber-400">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
@@ -116,7 +113,6 @@ export default function WholesalerAuthPage() {
             </span>
           </div>
 
-          {/* Tabs */}
           <div className="flex bg-muted rounded-lg p-1 mb-6">
             {(['signin', 'signup'] as Tab[]).map(t => (
               <button key={t} onClick={() => { setTab(t); setError(null); }}
@@ -126,7 +122,6 @@ export default function WholesalerAuthPage() {
             ))}
           </div>
 
-          {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
             {tab === 'signup' && (
               <div className="relative">
@@ -151,6 +146,20 @@ export default function WholesalerAuthPage() {
                 {showPwd ? <EyeOff size={15} /> : <Eye size={15} />}
               </button>
             </div>
+
+            {tab === 'signup' && (
+              <div className="relative">
+                <Tag size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none z-10" />
+                <select
+                  value={businessType}
+                  onChange={e => setBusinessType(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2 rounded-md border border-input bg-background text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background appearance-none"
+                >
+                  <option value="">Select business type…</option>
+                  {BUSINESS_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+            )}
 
             {tab === 'signin' && (
               <div className="flex justify-end -mt-1">
