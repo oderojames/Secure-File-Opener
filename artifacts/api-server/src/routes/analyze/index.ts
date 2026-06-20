@@ -862,6 +862,7 @@ Step 1b — The SUMMARY section contains a breakdown table with one row per TRAN
 - buyGoodsPaidIn: the "Paid In" amount on the row labelled "Lipa Na M-Pesa (Buy Goods)" / "Buy Goods" / "Merchant Payment" / "Customer Merchant Payment" / "Till" — or null if there is no Buy Goods row.
 - buyGoodsPaidOut: the "Paid Out" amount on that SAME Buy Goods row, or null.
 IMPORTANT: these four values come ONLY from the summary breakdown table, NOT from summing individual transaction rows. If a row or its amount is missing, return null for that field (do not guess, do not use 0 unless the table literally shows 0.00).
+NOTE ON "Paid Out": the Paid Out column is often shown as a negative number or in parentheses (e.g. "-120,000.00" or "(120,000.00)"). Always return its POSITIVE magnitude (120000.00), never a negative value. The same applies to the grand-total paidOut.
 
 Step 2 — Calculate derived values using ONLY the extracted figures above:
 - netCashFlow: paidIn - paidOut  (can be negative)
@@ -887,15 +888,20 @@ Rules:
   try {
     const parsed = JSON.parse(clean) as AISummary;
     if (typeof parsed.paidIn !== "number" || typeof parsed.paidOut !== "number") return null;
+    // Paid Out / Paid In are amounts: take positive magnitude (statements often
+    // show the Paid Out column as a negative number).
+    parsed.paidIn  = round2(Math.abs(parsed.paidIn));
+    parsed.paidOut = round2(Math.abs(parsed.paidOut));
     // Ensure all derived fields are numbers with sensible defaults
     parsed.netCashFlow           = typeof parsed.netCashFlow === "number"           ? parsed.netCashFlow           : round2(parsed.paidIn - parsed.paidOut);
     parsed.cashFlowRatio         = typeof parsed.cashFlowRatio === "number"         ? parsed.cashFlowRatio         : parsed.paidOut > 0 ? round2(parsed.paidIn / parsed.paidOut) : 2.0;
     parsed.monthCount            = typeof parsed.monthCount === "number" && parsed.monthCount >= 1 ? Math.round(parsed.monthCount) : 1;
     parsed.averageMonthlyIncome  = typeof parsed.averageMonthlyIncome === "number"  ? parsed.averageMonthlyIncome  : round2(parsed.paidIn / parsed.monthCount);
     parsed.averageDailyIncome    = typeof parsed.averageDailyIncome === "number"    ? parsed.averageDailyIncome    : round2(parsed.paidIn / (parsed.monthCount * 30));
-    // Per-type summary figures: keep only finite, non-negative numbers; otherwise null.
+    // Per-type summary figures: keep finite numbers as their positive magnitude
+    // (the Paid Out column is often presented as a negative); otherwise null.
     const cleanAmount = (v: unknown): number | null =>
-      typeof v === "number" && Number.isFinite(v) && v >= 0 ? round2(v) : null;
+      typeof v === "number" && Number.isFinite(v) ? round2(Math.abs(v)) : null;
     parsed.paybillPaidIn   = cleanAmount(parsed.paybillPaidIn);
     parsed.paybillPaidOut  = cleanAmount(parsed.paybillPaidOut);
     parsed.buyGoodsPaidIn  = cleanAmount(parsed.buyGoodsPaidIn);
