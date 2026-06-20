@@ -321,7 +321,14 @@ function dedup(txs: RawTransaction[]): RawTransaction[] {
 
 type ScoreFactor = { name: string; score: number; weight: number; impact: "positive" | "neutral" | "negative"; detail: string };
 
-function computeScore(txs: RawTransaction[], paymentMethod = "sendmoney") {
+function computeScore(
+  txs: RawTransaction[],
+  paymentMethod = "sendmoney",
+  incomeOverride?: number | null,
+  expenditureOverride?: number | null,
+) {
+  const hasIncomeOverride      = typeof incomeOverride === "number" && Number.isFinite(incomeOverride) && incomeOverride >= 0;
+  const hasExpenditureOverride = typeof expenditureOverride === "number" && Number.isFinite(expenditureOverride) && expenditureOverride >= 0;
   // ── Income filter by payment method ─────────────────────────────────────────
   const PAYBILL_IN_RE    = /business payment|lipa na mpesa.*paybill|received.*paybill|paybill.*received|pay bill.*received/i;
   const TILLNUMBER_IN_RE = /merchant payment|buy goods|till number|lipa na mpesa.*goods|pochi la biashara/i;
@@ -342,8 +349,10 @@ function computeScore(txs: RawTransaction[], paymentMethod = "sendmoney") {
   const fees       = txs.filter(t => t.isFee);
   const allCredits = txs.filter(t => t.type === "credit");
 
-  const totalIncome      = round2(credits.reduce((s, t) => s + t.amount, 0));
-  const totalExpenditure = round2(debits.reduce((s, t) => s + t.amount, 0));
+  // Income / expenditure: prefer the summary-table overrides (accurate per-type
+  // figures for PayBill / Buy Goods) and fall back to the transaction-level sum.
+  const totalIncome      = hasIncomeOverride      ? round2(incomeOverride as number)      : round2(credits.reduce((s, t) => s + t.amount, 0));
+  const totalExpenditure = hasExpenditureOverride ? round2(expenditureOverride as number) : round2(debits.reduce((s, t) => s + t.amount, 0));
   const totalFees        = round2(fees.reduce((s, t) => s + t.amount, 0));
   const netCashFlow      = round2(totalIncome - totalExpenditure - totalFees);
   const cashFlowRatio    = totalExpenditure === 0 ? 2.0 : round2(totalIncome / totalExpenditure);
@@ -367,10 +376,15 @@ function computeScore(txs: RawTransaction[], paymentMethod = "sendmoney") {
   const avgIncomePerMonth = totalIncomeCount / monthCount;
 
   // ── Shared sub-calcs ─────────────────────────────────────────────────────────
-  const mean = avgMonthlyIncome;
-  const cv = mean === 0 ? 1 : (() => {
-    const variance = monthlyIncomeAmounts.reduce((s, x) => s + Math.pow(x - mean, 2), 0) / monthlyIncomeAmounts.length;
-    return Math.sqrt(variance) / mean;
+  // Consistency uses the month-by-month income SERIES (always transaction-based)
+  // and its own mean — never the override total — so the coefficient of variation
+  // measures the real shape of activity over time.
+  const seriesMean = monthlyIncomeAmounts.length > 0
+    ? monthlyIncomeAmounts.reduce((s, x) => s + x, 0) / monthlyIncomeAmounts.length
+    : 0;
+  const cv = seriesMean === 0 ? 1 : (() => {
+    const variance = monthlyIncomeAmounts.reduce((s, x) => s + Math.pow(x - seriesMean, 2), 0) / monthlyIncomeAmounts.length;
+    return Math.sqrt(variance) / seriesMean;
   })();
   const inactiveMonths = monthlyIncomeAmounts.filter(m => m === 0).length;
   const inactiveRatio  = inactiveMonths / monthCount;
@@ -803,16 +817,24 @@ interface AISummary {
   currency: string;
   customerName: string | null;
   customerPhone: string | null;
+  // Per-transaction-type figures read from the statement SUMMARY breakdown table.
+  // null when that transaction-type row is absent from the summary.
+  paybillPaidIn: number | null;
+  paybillPaidOut: number | null;
+  buyGoodsPaidIn: number | null;
+  buyGoodsPaidOut: number | null;
 }
 
 async function extractSummaryWithAI(text: string): Promise<AISummary | null> {
   const openai = getOpenAI();
   if (!openai) return null;
 
-  // Send first + last 3000 chars to capture both summary header and footer
-  const head = text.slice(0, 3000);
+  // Send first + last chars to capture both the summary breakdown table (head)
+  // and the totals footer (tail). The per-transaction-type breakdown lives on
+  // page 1, so use a larger head slice to make sure the whole table is included.
+  const head = text.slice(0, 5000);
   const tail = text.slice(-3000);
-  const excerpt = head + (text.length > 6000 ? "\n...\n" + tail : "");
+  const excerpt = head + (text.length > 8000 ? "\n...\n" + tail : "");
 
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
@@ -824,8 +846,8 @@ async function extractSummaryWithAI(text: string): Promise<AISummary | null> {
         content: `You are a financial data extractor for Safaricom M-Pesa statements.
 
 Step 1 — Extract EXACTLY from the statement summary section (never from individual transaction rows):
-- paidIn: total "Paid In" / "Money In" / "Total Received" figure (this is TOTAL INCOME)
-- paidOut: total "Withdrawn" / "Paid Out" / "Money Out" / "Total Sent" figure (this is TOTAL EXPENDITURE)
+- paidIn: grand-total "Paid In" / "Money In" / "Total Received" figure (this is TOTAL INCOME)
+- paidOut: grand-total "Withdrawn" / "Paid Out" / "Money Out" / "Total Sent" figure (this is TOTAL EXPENDITURE)
 - openingBalance: opening balance, or null
 - closingBalance: closing balance, or null
 - periodStart: statement period start date as YYYY-MM-DD, or null
@@ -833,6 +855,13 @@ Step 1 — Extract EXACTLY from the statement summary section (never from indivi
 - currency: currency code, default "KES"
 - customerName: full customer name, or null
 - customerPhone: phone number, or null
+
+Step 1b — The SUMMARY section contains a breakdown table with one row per TRANSACTION TYPE and two money columns ("Paid In" and "Paid Out"). From that table read these specific rows. Match the row by its transaction-type label, case-insensitively, ignoring extra words:
+- paybillPaidIn: the "Paid In" amount on the row labelled "Lipa Na M-Pesa (Pay Bill)" / "Pay Bill" / "PayBill" / "Customer PayBill" / "Pay Bill Charges" — use the main Pay Bill row, or null if there is no Pay Bill row.
+- paybillPaidOut: the "Paid Out" amount on that SAME Pay Bill row, or null.
+- buyGoodsPaidIn: the "Paid In" amount on the row labelled "Lipa Na M-Pesa (Buy Goods)" / "Buy Goods" / "Merchant Payment" / "Customer Merchant Payment" / "Till" — or null if there is no Buy Goods row.
+- buyGoodsPaidOut: the "Paid Out" amount on that SAME Buy Goods row, or null.
+IMPORTANT: these four values come ONLY from the summary breakdown table, NOT from summing individual transaction rows. If a row or its amount is missing, return null for that field (do not guess, do not use 0 unless the table literally shows 0.00).
 
 Step 2 — Calculate derived values using ONLY the extracted figures above:
 - netCashFlow: paidIn - paidOut  (can be negative)
@@ -864,6 +893,13 @@ Rules:
     parsed.monthCount            = typeof parsed.monthCount === "number" && parsed.monthCount >= 1 ? Math.round(parsed.monthCount) : 1;
     parsed.averageMonthlyIncome  = typeof parsed.averageMonthlyIncome === "number"  ? parsed.averageMonthlyIncome  : round2(parsed.paidIn / parsed.monthCount);
     parsed.averageDailyIncome    = typeof parsed.averageDailyIncome === "number"    ? parsed.averageDailyIncome    : round2(parsed.paidIn / (parsed.monthCount * 30));
+    // Per-type summary figures: keep only finite, non-negative numbers; otherwise null.
+    const cleanAmount = (v: unknown): number | null =>
+      typeof v === "number" && Number.isFinite(v) && v >= 0 ? round2(v) : null;
+    parsed.paybillPaidIn   = cleanAmount(parsed.paybillPaidIn);
+    parsed.paybillPaidOut  = cleanAmount(parsed.paybillPaidOut);
+    parsed.buyGoodsPaidIn  = cleanAmount(parsed.buyGoodsPaidIn);
+    parsed.buyGoodsPaidOut = cleanAmount(parsed.buyGoodsPaidOut);
     return parsed;
   } catch {
     return null;
@@ -891,22 +927,36 @@ router.post("/analyze/mpesa", async (req, res) => {
       return;
     }
 
-    // ── Step 2: Score (with payment-method income filter) + AI summary ────────
-    const [aiSummary, scored] = await Promise.all([
-      extractSummaryWithAI(text),
-      Promise.resolve(computeScore(transactions, paymentMethod)),
-    ]);
+    // ── Step 2: AI summary first, then score using the summary figures ────────
+    const aiSummary = await extractSummaryWithAI(text);
 
+    // For PayBill / Buy Goods, the income & expenditure come straight from the
+    // statement SUMMARY breakdown table (per transaction type) — not from summing
+    // individual rows. These feed directly into the credit-worthiness scoring.
+    let incomeOverride: number | null | undefined;
+    let expenditureOverride: number | null | undefined;
+    if (paymentMethod === "paybill") {
+      incomeOverride      = aiSummary?.paybillPaidIn;
+      expenditureOverride = aiSummary?.paybillPaidOut;
+    } else if (paymentMethod === "tillnumber") {
+      incomeOverride      = aiSummary?.buyGoodsPaidIn;
+      expenditureOverride = aiSummary?.buyGoodsPaidOut;
+    }
+
+    const scored = computeScore(transactions, paymentMethod, incomeOverride, expenditureOverride);
     const { metrics, score, dailyIncome, monthlyIncome } = scored;
 
-    // ── Step 3: Resolve totals ─────────────────────────────────────────────────
-    // For sendmoney: AI statement-level totals are authoritative.
-    // For filtered methods (paybill/till/bank): use the already-filtered
-    //   metrics.totalIncome; AI still provides expenditure & period info.
+    // ── Step 3: Resolve headline totals for display ────────────────────────────
+    // sendmoney: AI statement-level grand totals are authoritative.
+    // paybill / tillnumber: use the summary per-type figures already baked into
+    //   metrics by computeScore (override) — fall back to AI/metrics if absent.
+    // bankpaybill: transaction-filtered metrics, AI for expenditure/period.
     const totalIncome = paymentMethod === "sendmoney"
       ? (aiSummary?.paidIn ?? metrics.totalIncome)
       : metrics.totalIncome;
-    const totalExpenditure     = aiSummary?.paidOut             ?? metrics.totalExpenditure;
+    const totalExpenditure = paymentMethod === "sendmoney" || paymentMethod === "bankpaybill"
+      ? (aiSummary?.paidOut ?? metrics.totalExpenditure)
+      : metrics.totalExpenditure;
     const netCashFlow          = round2(totalIncome - totalExpenditure);
     const cashFlowRatio        = totalExpenditure === 0 ? 2.0 : round2(totalIncome / totalExpenditure);
     const monthCount           = aiSummary?.monthCount          ?? (metrics.monthCount || 1);
