@@ -211,7 +211,7 @@ const RETAILER_FEATURES = [
 
 const WHOLESALER_FEATURES = [
   "View credit reports for retailers who have shared with you — score, grade and recommended limit.",
-  "See each retailer's business name, owner contact, phone, email (tap the email to write a message), statement period and date added.",
+  "See each retailer's business name, business type, owner contact, phone, email (tap the email to write a message), statement period and date added.",
   "Search to quickly find a specific retailer.",
   "Track how many report slots you've used against your quota.",
   "Upgrade your slot limit via M-Pesa to unlock more retailer reports.",
@@ -234,7 +234,7 @@ function FloatingHelp() {
       <Chatbot
         key="wholesaler"
         screenName="Wholesaler Portal"
-        screenContext="The Wholesaler Portal (Retailers Managed dashboard). Wholesalers view credit reports for retailers who have shared with them, including score, grade and recommended credit limit. Each entry shows the retailer's business name, owner contact, phone, email (a clickable mailto link), the M-Pesa statement period and the date added. IMPORTANT: wholesalers CANNOT manually add a retailer — there is no 'add retailer' button. A retailer appears here automatically only after that retailer uploads their M-Pesa statement and chooses to make their report public or share it with this wholesaler. Wholesalers can search the retailers they already have. There is a free quota of report slots; once it is reached, extra retailers are locked and the wholesaler can pay via M-Pesa to upgrade their slot limit and unlock more reports. Email must be verified to access the dashboard."
+        screenContext="The Wholesaler Portal (Retailers Managed dashboard). Wholesalers view credit reports for retailers who have shared with them, including score, grade and recommended credit limit. Each entry shows the retailer's business name, the business type the retailer chose (e.g. their industry/category), owner contact, phone, email (a clickable mailto link), the M-Pesa statement period and the date added. IMPORTANT: wholesalers CANNOT manually add a retailer — there is no 'add retailer' button. A retailer appears here automatically only after that retailer uploads their M-Pesa statement and chooses to make their report public or share it with this wholesaler. Wholesalers can search the retailers they already have. There is a free quota of report slots; once it is reached, extra retailers are locked and the wholesaler can pay via M-Pesa to upgrade their slot limit and unlock more reports. Email must be verified to access the dashboard."
         features={WHOLESALER_FEATURES}
       />
     );

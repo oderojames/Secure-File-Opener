@@ -3,7 +3,7 @@ import { useLocation } from 'wouter';
 import { useAuth } from '@/contexts/AuthContext';
 import WholesalerAuthPage from '@/pages/WholesalerAuthPage';
 import CompleteProfileScreen from '@/components/CompleteProfileScreen';
-import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock, Calendar, Mail, CheckCircle2, Smartphone, CreditCard, ChevronRight, X, Filter } from 'lucide-react';
+import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock, Calendar, Mail, CheckCircle2, Smartphone, CreditCard, ChevronRight, X, Filter, Briefcase } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { collection, getDocs, query, where, doc, getDoc, setDoc } from 'firebase/firestore';
@@ -433,6 +433,11 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
                             {r.customerName && r.retailerName && (
                               <p className="text-[11px] text-muted-foreground truncate"><span className="text-muted-foreground/60">Business:</span> {r.retailerName}</p>
                             )}
+                            {r.businessType && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-primary/10 text-primary text-[10px] font-medium border border-primary/20">
+                                <Briefcase size={9} className="shrink-0" /> {r.businessType}
+                              </span>
+                            )}
                             {r.customerPhone && (
                               <p className="text-[11px] text-amber-400/80 truncate"><span className="text-muted-foreground/60">{r.customerName ? 'Owner:' : 'Contact:'}</span> {r.customerPhone}</p>
                             )}
@@ -491,6 +496,11 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
                           <p className="font-semibold text-sm text-foreground truncate">{r.customerName || r.retailerName || '—'}</p>
                           {r.customerName && r.retailerName && (
                             <p className="text-[11px] text-muted-foreground truncate"><span className="text-muted-foreground/60">Business:</span> {r.retailerName}</p>
+                          )}
+                          {r.businessType && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-primary/10 text-primary text-[10px] font-medium border border-primary/20">
+                              <Briefcase size={9} className="shrink-0" /> {r.businessType}
+                            </span>
                           )}
                           {r.customerPhone && (
                             <p className="text-[11px] text-amber-400/80 truncate"><span className="text-muted-foreground/60">{r.customerName ? 'Contact Owner:' : 'Contact Business:'}</span> {r.customerPhone}</p>
