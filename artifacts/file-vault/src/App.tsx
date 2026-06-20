@@ -10,6 +10,7 @@ import HomePage from "@/pages/HomePage";
 import WholesalerPage from "@/pages/WholesalerPage";
 import CompleteProfileScreen from "@/components/CompleteProfileScreen";
 import TermsGate from "@/components/TermsGate";
+import ContactWidget from "@/components/ContactWidget";
 import NotFound from "@/pages/not-found";
 import { Building2, ShieldCheck, Mail, RefreshCw, CheckCircle2, AlertCircle } from "lucide-react";
 
@@ -208,6 +209,7 @@ function App() {
               <Router />
             </WouterRouter>
           </TermsGate>
+          <ContactWidget />
         </AuthProvider>
         <Toaster />
       </TooltipProvider>
