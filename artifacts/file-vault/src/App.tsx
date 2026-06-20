@@ -9,6 +9,7 @@ import AuthPage from "@/pages/AuthPage";
 import HomePage from "@/pages/HomePage";
 import WholesalerPage from "@/pages/WholesalerPage";
 import CompleteProfileScreen from "@/components/CompleteProfileScreen";
+import TermsGate from "@/components/TermsGate";
 import NotFound from "@/pages/not-found";
 import { Building2, ShieldCheck, Mail, RefreshCw, CheckCircle2, AlertCircle } from "lucide-react";
 
@@ -202,9 +203,11 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <AuthProvider>
-          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-            <Router />
-          </WouterRouter>
+          <TermsGate>
+            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+              <Router />
+            </WouterRouter>
+          </TermsGate>
         </AuthProvider>
         <Toaster />
       </TooltipProvider>
