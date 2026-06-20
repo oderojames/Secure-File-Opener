@@ -48,7 +48,21 @@ export default function ContactWidget() {
         {open ? (
           <X size={22} className="text-foreground" />
         ) : (
-          <img src={contactIcon} alt="Contact support" className="w-7 h-7 object-contain" />
+          <span
+            aria-hidden
+            className="w-5 h-5"
+            style={{
+              backgroundColor: 'hsl(220 80% 50%)',
+              WebkitMaskImage: `url(${contactIcon})`,
+              maskImage: `url(${contactIcon})`,
+              WebkitMaskSize: 'contain',
+              maskSize: 'contain',
+              WebkitMaskRepeat: 'no-repeat',
+              maskRepeat: 'no-repeat',
+              WebkitMaskPosition: 'center',
+              maskPosition: 'center',
+            }}
+          />
         )}
       </button>
     </div>
