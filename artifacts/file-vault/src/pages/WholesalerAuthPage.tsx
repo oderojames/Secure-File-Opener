@@ -56,7 +56,9 @@ export default function WholesalerAuthPage() {
       return 'An account with this email already exists. If it is your Retailer account, please sign in to the Retailer Portal instead.';
     if (code.includes('weak-password')) return 'Password must be at least 6 characters.';
     if (code.includes('invalid-email')) return 'Please enter a valid email address.';
-    if (code.includes('network')) return 'Network error. Please check your connection.';
+    if (code.includes('too-many-requests')) return 'Too many attempts. Please wait a few minutes and try again.';
+    if (code.includes('network-request-failed') || code.includes('network')) return 'Network error. Please check your connection and try again.';
+    if (code.includes('user-disabled')) return 'This account has been disabled. Please contact support.';
     return 'Something went wrong. Please try again.';
   };
 
@@ -142,6 +144,7 @@ export default function WholesalerAuthPage() {
               <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input type={showPwd ? 'text' : 'password'} placeholder="Password"
                 value={password} onChange={e => setPassword(e.target.value)}
+                autoComplete={tab === 'signup' ? 'new-password' : 'current-password'}
                 className="pl-9 pr-10 bg-background" required />
               <button type="button" onClick={() => setShowPwd(p => !p)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">

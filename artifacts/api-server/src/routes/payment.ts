@@ -7,6 +7,9 @@ const API_KEY = () => process.env["PAYNECTA_API_KEY"] || "";
 const USER_EMAIL = () => process.env["PAYNECTA_USER_EMAIL"] || "";
 const PAYMENT_CODE = () => process.env["PAYNECTA_PAYMENT_CODE"] || "";
 
+const RETRY_ATTEMPTS = 2;
+const RETRY_DELAY_MS = 1200;
+
 function paynectaHeaders() {
   return {
     "Content-Type": "application/json",
@@ -24,6 +27,68 @@ function formatPhone(raw: string): string {
   return digits;
 }
 
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function paynectaPost(path: string, body: object): Promise<{ ok: boolean; status: number; data: any }> {
+  let lastError: any;
+  for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
+    try {
+      const response = await fetch(`${BASE_URL()}${path}`, {
+        method: "POST",
+        headers: paynectaHeaders(),
+        body: JSON.stringify(body),
+      });
+      const data = await response.json();
+      if (response.status < 500) {
+        return { ok: response.ok, status: response.status, data };
+      }
+      lastError = data;
+    } catch (err) {
+      lastError = err;
+    }
+    if (attempt < RETRY_ATTEMPTS - 1) {
+      await sleep(RETRY_DELAY_MS);
+    }
+  }
+  return {
+    ok: false,
+    status: 500,
+    data: {
+      success: false,
+      code: 500,
+      message: "Payment initiation failed. Please try again.",
+      error: "SERVER_ERROR",
+      _raw: lastError,
+    },
+  };
+}
+
+async function paynectaGet(url: string): Promise<{ ok: boolean; status: number; data: any }> {
+  let lastError: any;
+  for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
+    try {
+      const response = await fetch(url, { headers: paynectaHeaders() });
+      const data = await response.json();
+      if (response.status < 500) {
+        return { ok: response.ok, status: response.status, data };
+      }
+      lastError = data;
+    } catch (err) {
+      lastError = err;
+    }
+    if (attempt < RETRY_ATTEMPTS - 1) {
+      await sleep(RETRY_DELAY_MS);
+    }
+  }
+  return {
+    ok: false,
+    status: 500,
+    data: { success: false, code: 500, message: "Status check failed", _raw: lastError },
+  };
+}
+
 router.post("/payment/initiate", async (req: Request, res: Response) => {
   const { phone, amount } = req.body as { phone?: string; amount?: number };
   if (!phone) {
@@ -39,35 +104,20 @@ router.post("/payment/initiate", async (req: Request, res: Response) => {
 
   const chargeAmount = typeof amount === "number" && amount > 0 ? amount : 50;
 
-  try {
-    const response = await fetch(`${BASE_URL()}/payment/initialize`, {
-      method: "POST",
-      headers: paynectaHeaders(),
-      body: JSON.stringify({
-        code: PAYMENT_CODE(),
-        mobile_number: formatted,
-        amount: chargeAmount,
-      }),
-    });
-    const data = await response.json();
-    res.status(response.ok ? 200 : 400).json(data);
-  } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message || "Payment initiation failed" });
-  }
+  const { ok, status, data } = await paynectaPost("/payment/initialize", {
+    code: PAYMENT_CODE(),
+    mobile_number: formatted,
+    amount: chargeAmount,
+  });
+
+  res.status(ok ? 200 : status).json(data);
 });
 
 router.get("/payment/status/:reference", async (req: Request, res: Response) => {
   const { reference } = req.params;
-  try {
-    const url = `${BASE_URL()}/payment/status?transaction_reference=${encodeURIComponent(reference)}`;
-    const response = await fetch(url, {
-      headers: paynectaHeaders(),
-    });
-    const data = await response.json();
-    res.status(response.ok ? 200 : 400).json(data);
-  } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message || "Status check failed" });
-  }
+  const url = `${BASE_URL()}/payment/status?transaction_reference=${encodeURIComponent(reference)}`;
+  const { ok, status, data } = await paynectaGet(url);
+  res.status(ok ? 200 : status).json(data);
 });
 
 export default router;

@@ -226,7 +226,8 @@ async function fsSaveAnalysis(
   allowedWholesalers: string[] = [],
 ): Promise<void> {
   await setDoc(userDoc(uid, analysis.id), analysis);
-  // Write a summary to the shared top-level collection for wholesaler access
+  // Write a summary to the shared top-level collection for wholesaler access.
+  // This is best-effort — a failure here must NOT break the local save.
   await setDoc(sharedReportDoc(analysis.id), {
     id: analysis.id,
     retailerUid: uid,
@@ -243,6 +244,8 @@ async function fsSaveAnalysis(
     periodEnd: analysis.result.summary?.periodEnd ?? null,
     visibility,
     allowedWholesalers: visibility === 'private' ? allowedWholesalers : [],
+  }).catch((err) => {
+    console.warn('[fsSaveAnalysis] shared report write failed (non-fatal):', err?.code ?? err?.message);
   });
 }
 

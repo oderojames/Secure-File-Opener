@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/contexts/AuthContext';
 import WholesalerAuthPage from '@/pages/WholesalerAuthPage';
-import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock, Calendar, Mail, CheckCircle2, Smartphone, CreditCard, ChevronRight, X, ShieldAlert } from 'lucide-react';
+import { Building2, LogOut, Users, RefreshCw, AlertCircle, Search, Copy, Check, Trash2, Lock, Calendar, Mail, CheckCircle2, Smartphone, CreditCard, ChevronRight, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { collection, getDocs, query, where, doc, getDoc, setDoc } from 'firebase/firestore';
