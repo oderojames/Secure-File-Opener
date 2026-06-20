@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Phone, X, Headphones } from 'lucide-react';
+import { Phone, X } from 'lucide-react';
+import contactIcon from '@assets/image_1781984218822.png';
 
 const SUPPORT_NUMBERS = ['0114458799', '0721628310'];
 
@@ -7,11 +8,11 @@ export default function ContactWidget() {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="fixed bottom-5 left-5 z-[60] flex flex-col items-start gap-3">
+    <div className="fixed bottom-5 right-5 z-[60] flex flex-col items-end gap-3">
       {open && (
         <div className="w-72 bg-card border border-border rounded-2xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-primary/10">
-            <Headphones size={16} className="text-primary" />
+            <img src={contactIcon} alt="" className="w-5 h-5 object-contain dark:invert" />
             <div className="flex-1">
               <p className="text-sm font-semibold text-foreground leading-tight">Customer Support</p>
               <p className="text-[11px] text-muted-foreground">We're here to help with any issues or enquiries</p>
@@ -41,10 +42,14 @@ export default function ContactWidget() {
         type="button"
         onClick={() => setOpen(o => !o)}
         aria-label={open ? 'Close contact support' : 'Contact support'}
-        className="inline-flex items-center gap-2 rounded-full bg-primary text-primary-foreground font-semibold shadow-lg shadow-primary/30 px-4 py-3 hover:bg-primary/90 transition-colors"
+        aria-expanded={open}
+        className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-white shadow-lg shadow-black/30 ring-1 ring-black/5 hover:scale-105 transition-transform"
       >
-        {open ? <X size={18} /> : <Headphones size={18} />}
-        {!open && <span className="text-sm">Contact</span>}
+        {open ? (
+          <X size={22} className="text-foreground" />
+        ) : (
+          <img src={contactIcon} alt="Contact support" className="w-7 h-7 object-contain" />
+        )}
       </button>
     </div>
   );
