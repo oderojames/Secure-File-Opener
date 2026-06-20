@@ -444,11 +444,16 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
                                 </button>
                               </div>
                             )}
-                            <p className="text-[10px] text-muted-foreground pt-0.5">{formatDate(r.dateAdded)}</p>
-                            {formatPeriod(r.periodStart, r.periodEnd) && (
+                            <p className="text-[10px] text-muted-foreground pt-0.5">Added {formatDate(r.dateAdded)}</p>
+                            {formatPeriod(r.periodStart, r.periodEnd) ? (
                               <div className="flex items-center gap-1 pt-0.5">
                                 <Calendar size={9} className="text-amber-400/70 shrink-0" />
-                                <p className="text-[10px] text-amber-400/80">{formatPeriod(r.periodStart, r.periodEnd)}</p>
+                                <p className="text-[10px] text-amber-400/80"><span className="text-muted-foreground/60">M-Pesa period:</span> {formatPeriod(r.periodStart, r.periodEnd)}</p>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1 pt-0.5">
+                                <Calendar size={9} className="text-muted-foreground/40 shrink-0" />
+                                <p className="text-[10px] text-muted-foreground/50">M-Pesa period: N/A</p>
                               </div>
                             )}
                           </div>
@@ -472,15 +477,16 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
 
                 {/* ── Desktop table ── */}
                 <div className="hidden sm:block bg-card border border-border rounded-xl overflow-hidden">
-                  <div className="grid grid-cols-[1fr_160px_100px] border-b border-border bg-muted/40 px-5 py-3">
+                  <div className="grid grid-cols-[1fr_150px_150px_100px] border-b border-border bg-muted/40 px-5 py-3">
                     <span className="text-xs font-semibold text-muted-foreground">Retailer</span>
                     <span className="text-xs font-semibold text-muted-foreground">Credit Score</span>
-                    <span className="text-xs font-semibold text-muted-foreground">Date</span>
+                    <span className="text-xs font-semibold text-muted-foreground">Statement Period</span>
+                    <span className="text-xs font-semibold text-muted-foreground">Date Added</span>
                   </div>
                   {visibleReports.map((r, i) => {
                     const s = scoreStyle(r.score);
                     return (
-                      <div key={r.id + i} className="grid grid-cols-[1fr_160px_100px] items-center px-5 py-4 border-b border-border last:border-0 hover:bg-muted/20 transition-colors">
+                      <div key={r.id + i} className="grid grid-cols-[1fr_150px_150px_100px] items-center px-5 py-4 border-b border-border last:border-0 hover:bg-muted/20 transition-colors">
                         <div className="min-w-0 pr-4 space-y-0.5">
                           <p className="font-semibold text-sm text-foreground truncate">{r.customerName || r.retailerName || '—'}</p>
                           {r.customerName && r.retailerName && (
@@ -513,14 +519,21 @@ function RetailersManagedTab({ wholesalerUid }: { wholesalerUid: string }) {
                             <p className={`text-[10px] mt-0.5 ${s.text}`}>{r.label}</p>
                           </div>
                         </div>
-                        <div className="space-y-0.5">
-                          <span className="text-xs text-muted-foreground">{formatDate(r.dateAdded)}</span>
-                          {formatPeriod(r.periodStart, r.periodEnd) && (
-                            <div className="flex items-center gap-1">
-                              <Calendar size={9} className="text-amber-400/70 shrink-0" />
-                              <span className="text-[10px] text-amber-400/80">{formatPeriod(r.periodStart, r.periodEnd)}</span>
+                        <div className="pr-3">
+                          {formatPeriod(r.periodStart, r.periodEnd) ? (
+                            <div className="flex items-center gap-1.5">
+                              <Calendar size={12} className="text-amber-400/70 shrink-0" />
+                              <span className="text-xs text-amber-400/90">{formatPeriod(r.periodStart, r.periodEnd)}</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              <Calendar size={12} className="text-muted-foreground/40 shrink-0" />
+                              <span className="text-xs text-muted-foreground/50">N/A</span>
                             </div>
                           )}
+                        </div>
+                        <div>
+                          <span className="text-xs text-muted-foreground">{formatDate(r.dateAdded)}</span>
                         </div>
                       </div>
                     );
