@@ -7,7 +7,7 @@ import {
   ShieldCheck, BadgeAlert, ThumbsUp, ThumbsDown, Minus,
   ArrowDownLeft, ArrowUpRight, Lightbulb, AlertTriangle, XCircle,
   Banknote, Phone, CreditCard, RefreshCw, ShoppingBag, Building2,
-  LogOut, Menu, X, Globe, Settings, Smartphone, Users2,
+  LogOut, Menu, X, Globe, Settings, Smartphone, Users2, Share2, Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,6 +19,7 @@ import {
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/contexts/AuthContext';
 import VisibilityOnboarding from '@/pages/VisibilityOnboarding';
+import ReportShareModal from '@/components/ReportShareModal';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -332,6 +333,13 @@ export default function Vault() {
   const [allowedWholesalers, setAllowedWholesalers] = useState<string[]>([]);
   const [businessType, setBusinessType] = useState('');
   const [showVisibilitySettings, setShowVisibilitySettings] = useState(false);
+  const [reportShareModal, setReportShareModal] = useState<{
+    reportId: string;
+    reportName: string;
+    initialOption: 'public' | 'private' | 'sameBusiness';
+    initialSelected: string[];
+  } | null>(null);
+  const [reportShareLoading, setReportShareLoading] = useState<string | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -621,6 +629,30 @@ export default function Vault() {
   const formatSize = (b: number) => (b / 1024 / 1024).toFixed(2) + ' MB';
   const formatDate = (iso: string) => new Date(iso).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' });
 
+  const openReportShare = async (e: React.MouseEvent, a: { id: string; name: string }) => {
+    e.stopPropagation();
+    setReportShareLoading(a.id);
+    try {
+      const snap = await getDoc(sharedReportDoc(a.id));
+      const data = snap.exists() ? snap.data() : null;
+      setReportShareModal({
+        reportId: a.id,
+        reportName: a.name,
+        initialOption: (data?.visibility as 'public' | 'private' | 'sameBusiness') ?? visibilityPref ?? 'public',
+        initialSelected: data?.allowedWholesalers ?? [],
+      });
+    } catch {
+      setReportShareModal({
+        reportId: a.id,
+        reportName: a.name,
+        initialOption: (visibilityPref as 'public' | 'private' | 'sameBusiness') ?? 'public',
+        initialSelected: allowedWholesalers,
+      });
+    } finally {
+      setReportShareLoading(null);
+    }
+  };
+
   const isUploading = pendingPdf !== null;
 
   const closeSidebar = () => setSidebarOpen(false);
@@ -691,8 +723,19 @@ export default function Vault() {
                 <div className="text-xs font-medium truncate">{a.name}</div>
                 <div className="text-[10px] text-muted-foreground">{formatDate(a.dateAdded)}</div>
               </div>
+              <Button
+                variant="ghost" size="icon"
+                className="opacity-0 group-hover:opacity-100 h-6 w-6 text-muted-foreground hover:text-primary shrink-0"
+                onClick={e => openReportShare(e, a)}
+                title="Report sharing settings"
+                disabled={reportShareLoading === a.id}
+              >
+                {reportShareLoading === a.id
+                  ? <Loader2 size={11} className="animate-spin" />
+                  : <Share2 size={11} />}
+              </Button>
               <Button variant="ghost" size="icon" data-testid={`remove-${a.id}`}
-                className="opacity-0 group-hover:opacity-100 h-6 w-6 text-muted-foreground hover:text-destructive"
+                className="opacity-0 group-hover:opacity-100 h-6 w-6 text-muted-foreground hover:text-destructive shrink-0"
                 onClick={async e => {
                   e.stopPropagation();
                   await fsDeleteAnalysis(uid, a.id);
@@ -1164,6 +1207,28 @@ export default function Vault() {
           </div>
         </div>
       </div>
+    )}
+
+    {reportShareModal && (
+      <ReportShareModal
+        reportId={reportShareModal.reportId}
+        reportName={reportShareModal.reportName}
+        initialOption={reportShareModal.initialOption}
+        initialSelected={reportShareModal.initialSelected}
+        retailerBusinessType={businessType}
+        onClose={() => setReportShareModal(null)}
+        onSaved={(vis, allowed) => {
+          toast({
+            title: 'Sharing updated',
+            description:
+              vis === 'public'
+                ? 'This report is now visible to all wholesalers.'
+                : vis === 'sameBusiness'
+                ? 'This report is now visible to wholesalers in your business type.'
+                : `This report is now shared with ${allowed.length} specific wholesaler${allowed.length !== 1 ? 's' : ''}.`,
+          });
+        }}
+      />
     )}
   </>);
 }
