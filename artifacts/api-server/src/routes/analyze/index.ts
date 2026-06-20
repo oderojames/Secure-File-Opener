@@ -936,27 +936,28 @@ router.post("/analyze/mpesa", async (req, res) => {
     // ── Step 2: AI summary first, then score using the summary figures ────────
     const aiSummary = await extractSummaryWithAI(text);
 
-    // For PayBill / Buy Goods, the income & expenditure come straight from the
-    // statement SUMMARY breakdown table (per transaction type) — not from summing
-    // individual rows. These feed directly into the credit-worthiness scoring.
+    // For PayBill / Buy Goods:
+    //   income      = Paid In  on the specific method row in the summary table
+    //   expenditure = grand-total Paid Out of the entire statement
+    // This reflects that a merchant's business income is the PayBill/Buy Goods
+    // inflow, while ALL money leaving the account is their total expenditure.
     let incomeOverride: number | null | undefined;
     let expenditureOverride: number | null | undefined;
     if (paymentMethod === "paybill") {
       incomeOverride      = aiSummary?.paybillPaidIn;
-      expenditureOverride = aiSummary?.paybillPaidOut;
+      expenditureOverride = aiSummary?.paidOut;          // grand-total Paid Out
     } else if (paymentMethod === "tillnumber") {
       incomeOverride      = aiSummary?.buyGoodsPaidIn;
-      expenditureOverride = aiSummary?.buyGoodsPaidOut;
+      expenditureOverride = aiSummary?.paidOut;          // grand-total Paid Out
     }
 
     const scored = computeScore(transactions, paymentMethod, incomeOverride, expenditureOverride);
     const { metrics, score, dailyIncome, monthlyIncome } = scored;
 
     // ── Step 3: Resolve headline totals for display ────────────────────────────
-    // sendmoney: AI statement-level grand totals are authoritative.
-    // paybill / tillnumber: use the summary per-type figures already baked into
-    //   metrics by computeScore (override) — fall back to AI/metrics if absent.
-    // bankpaybill: transaction-filtered metrics, AI for expenditure/period.
+    // sendmoney / bankpaybill: AI grand totals are authoritative.
+    // paybill / tillnumber: income from per-method row; expenditure grand total —
+    //   both already baked into metrics by computeScore via the overrides above.
     const totalIncome = paymentMethod === "sendmoney"
       ? (aiSummary?.paidIn ?? metrics.totalIncome)
       : metrics.totalIncome;
