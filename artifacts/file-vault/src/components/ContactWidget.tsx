@@ -1,7 +1,7 @@
-import { useState } from 'react';
-import { Phone, X, Headset } from 'lucide-react';
+import { useState } from "react";
+import { Phone, X, Headset } from "lucide-react";
 
-const SUPPORT_NUMBERS = ['0114458799', '0721628310'];
+const SUPPORT_NUMBERS = ["0114458799", "0116351161"];
 
 export default function ContactWidget() {
   const [open, setOpen] = useState(false);
@@ -13,12 +13,16 @@ export default function ContactWidget() {
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-primary/10">
             <Headset size={16} className="text-primary" />
             <div className="flex-1">
-              <p className="text-sm font-semibold text-foreground leading-tight">Customer Support</p>
-              <p className="text-[11px] text-muted-foreground">We're here to help with any issues or enquiries</p>
+              <p className="text-sm font-semibold text-foreground leading-tight">
+                Customer Support
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                We're here to help with any issues or enquiries
+              </p>
             </div>
           </div>
           <div className="p-3 space-y-2">
-            {SUPPORT_NUMBERS.map(num => (
+            {SUPPORT_NUMBERS.map((num) => (
               <a
                 key={num}
                 href={`tel:${num}`}
@@ -28,8 +32,12 @@ export default function ContactWidget() {
                   <Phone size={16} />
                 </span>
                 <span className="flex flex-col">
-                  <span className="text-sm font-semibold text-foreground tracking-wide">{num}</span>
-                  <span className="text-[11px] text-muted-foreground group-hover:text-primary transition-colors">Tap to call</span>
+                  <span className="text-sm font-semibold text-foreground tracking-wide">
+                    {num}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground group-hover:text-primary transition-colors">
+                    Tap to call
+                  </span>
                 </span>
               </a>
             ))}
@@ -39,8 +47,8 @@ export default function ContactWidget() {
 
       <button
         type="button"
-        onClick={() => setOpen(o => !o)}
-        aria-label={open ? 'Close contact support' : 'Contact support'}
+        onClick={() => setOpen((o) => !o)}
+        aria-label={open ? "Close contact support" : "Contact support"}
         aria-expanded={open}
         className="relative inline-flex items-center justify-center w-14 h-14 rounded-full bg-gradient-to-br from-primary to-primary/80 text-white shadow-lg shadow-primary/40 hover:scale-105 active:scale-95 transition-transform"
       >
