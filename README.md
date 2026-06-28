@@ -2,7 +2,6 @@
 
 A secure, full-stack TypeScript application for safely opening and managing files. Built with modern web technologies and a focus on security best practices.
 
-**Live Demo:** [https://replit.com/@elizabeth232366/Secure-File-Opener](https://replit.com/@elizabeth232366/Secure-File-Opener)
 
 ## Overview
 
