@@ -171,7 +171,7 @@ MIT
 
 ## Support & Links
 
-- **Live Project:** [https://replit.com/@elizabeth232366/Secure-File-Opener](https://replit.com/@elizabeth232366/Secure-File-Opener)
+
 - **GitHub:** [oderojames/Secure-File-Opener](https://github.com/oderojames/Secure-File-Opener)
 - **Language:** Primarily TypeScript (95.1%), with CSS (3.2%) and other assets (1.7%)
 
